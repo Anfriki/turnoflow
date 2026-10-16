@@ -1,0 +1,179 @@
+// ─────────────────────────────────────────────────────────────
+//  TurnoFlow — Esquema PostgreSQL (Prisma ORM)
+//
+//  Restricciones que Prisma no puede expresar (índices parciales,
+//  CHECKs) están en prisma/migrations/*_init/migration.sql.
+//  Para cambios de esquema usá:
+//     npx prisma migrate dev --create-only --name <cambio>
+//  y revisá el SQL generado antes de aplicarlo (ver README).
+// ─────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  SUPERVISOR
+  OPERATOR
+}
+
+enum TicketType {
+  WALK_IN
+  SCHEDULED
+}
+
+enum TicketStatus {
+  WAITING
+  CALLED
+  IN_SERVICE
+  ATTENDED
+  ABSENT
+  CANCELLED
+}
+
+/// Sucursales
+model Branch {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @db.VarChar(120)
+  code      String   @unique @db.VarChar(20)
+  address   String?  @db.VarChar(255)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  categories ServiceCategory[]
+  desks      Desk[]
+  users      User[]
+  tickets    Ticket[]
+
+  @@map("branches")
+}
+
+/// Colas / trámites (Cajas, Reclamos, …)
+model ServiceCategory {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId             String   @map("branch_id") @db.Uuid
+  name                 String   @db.VarChar(80)
+  prefixLetter         String   @map("prefix_letter") @db.VarChar(3)
+  priorityLevel        Int      @default(0) @map("priority_level")
+  estimatedDurationMin Int      @default(10) @map("estimated_duration_min")
+  allowAppointments    Boolean  @default(true) @map("allow_appointments")
+  isActive             Boolean  @default(true) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  branch   Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  tickets  Ticket[]
+  desks    DeskCategory[]
+  counters DailyCounter[]
+
+  @@unique([branchId, prefixLetter])
+  @@index([branchId])
+  @@map("service_categories")
+}
+
+/// Boxes / ventanillas
+model Desk {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId          String   @map("branch_id") @db.Uuid
+  identifier        String   @db.VarChar(40)
+  currentOperatorId String?  @unique @map("current_operator_id") @db.Uuid
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  branch          Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  currentOperator User?          @relation("DeskOperator", fields: [currentOperatorId], references: [id], onDelete: SetNull)
+  categories      DeskCategory[]
+  tickets         Ticket[]
+
+  @@unique([branchId, identifier])
+  @@map("desks")
+}
+
+/// Qué colas atiende cada box (si un box no tiene filas aquí, atiende todas).
+model DeskCategory {
+  deskId     String @map("desk_id") @db.Uuid
+  categoryId String @map("category_id") @db.Uuid
+
+  desk     Desk            @relation(fields: [deskId], references: [id], onDelete: Cascade)
+  category ServiceCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([deskId, categoryId])
+  @@index([categoryId])
+  @@map("desk_categories")
+}
+
+/// Operadores / supervisores / administradores
+model User {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String   @db.VarChar(120)
+  email        String   @unique @db.VarChar(160)
+  passwordHash String   @map("password_hash") @db.VarChar(100)
+  role         Role     @default(OPERATOR)
+  branchId     String?  @map("branch_id") @db.Uuid
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  branch         Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  desk           Desk?    @relation("DeskOperator")
+  servedTickets  Ticket[] @relation("TicketOperator")
+
+  @@map("users")
+}
+
+/// Turnos (presenciales y citas)
+model Ticket {
+  id                 String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId           String       @map("branch_id") @db.Uuid
+  categoryId         String       @map("category_id") @db.Uuid
+  deskId             String?      @map("desk_id") @db.Uuid
+  operatorId         String?      @map("operator_id") @db.Uuid
+  ticketNumber       Int          @map("ticket_number")
+  code               String       @db.VarChar(12)
+  customerIdentifier String?      @map("customer_identifier") @db.VarChar(80)
+  type               TicketType   @default(WALK_IN)
+  scheduledAt        DateTime?    @map("scheduled_at") @db.Timestamptz(6)
+  status             TicketStatus @default(WAITING)
+  /// Prioridad copiada de la categoría al emitir (desnormalizada para el índice de despacho).
+  priorityLevel      Int          @default(0) @map("priority_level")
+  /// Día de negocio (en APP_TIMEZONE) al que pertenece la numeración.
+  serviceDate        DateTime     @map("service_date") @db.Date
+  recallCount        Int          @default(0) @map("recall_count")
+
+  // Métricas
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  checkedInAt DateTime? @map("checked_in_at") @db.Timestamptz(6)
+  calledAt    DateTime? @map("called_at") @db.Timestamptz(6)
+  startedAt   DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt  DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  branch   Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  category ServiceCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  desk     Desk?           @relation(fields: [deskId], references: [id], onDelete: SetNull)
+  operator User?           @relation("TicketOperator", fields: [operatorId], references: [id], onDelete: SetNull)
+
+  /// Índice de despacho para "Llamar siguiente"
+  @@index([branchId, status, priorityLevel(sort: Desc), createdAt(sort: Asc)], map: "idx_tickets_dispatch")
+  /// Un código no se repite dentro del mismo día de negocio
+  @@unique([branchId, categoryId, code, serviceDate], map: "uq_tickets_daily_code")
+  @@index([branchId, serviceDate], map: "idx_tickets_branch_day")
+  @@index([deskId, status], map: "idx_tickets_desk_status")
+  @@index([customerIdentifier, serviceDate], map: "idx_tickets_customer_day")
+  @@map("tickets")
+}
+
+/// Contador correlativo diario por cola (reinicio automático por fecha).
+model DailyCounter {
+  categoryId  String   @map("category_id") @db.Uuid
+  serviceDate DateTime @map("service_date") @db.Date
+  lastNumber  Int      @default(0) @map("last_number")
+
+  category ServiceCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([categoryId, serviceDate])
+  @@map("daily_counters")
+}

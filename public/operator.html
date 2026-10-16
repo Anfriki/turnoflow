@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Operador</title>
+  <link rel="stylesheet" href="/brand.css" />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <header class="brand-bar">
+    <img class="logo" data-brand="logo" alt="" />
+    <div class="names"><span class="company" data-brand="company"></span><span class="tagline">Panel de operador</span></div>
+    <div class="spacer"></div>
+    <div class="meta" id="who"></div>
+  </header>
+
+  <main class="container">
+    <!-- Login -->
+    <section id="login-view" hidden>
+      <div class="card" style="max-width:420px;margin:40px auto">
+        <h2 style="margin-top:0">Ingresar</h2>
+        <form id="login-form">
+          <div class="field"><label for="email">Email</label><input id="email" type="email" required autocomplete="username" /></div>
+          <div class="field"><label for="password">Contraseña</label><input id="password" type="password" required autocomplete="current-password" /></div>
+          <p class="error-msg" id="login-error"></p>
+          <button class="btn lg" type="submit" style="width:100%">Ingresar</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Elegir box -->
+    <section id="desk-view" hidden>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <h2>Elegí tu box</h2>
+        <button class="btn ghost" data-action="logout">Salir</button>
+      </div>
+      <div class="desk-grid" id="desk-grid"></div>
+    </section>
+
+    <!-- Panel de atención -->
+    <section id="panel-view" hidden>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        <div>
+          <h2 style="margin:0" id="desk-title"></h2>
+          <span class="muted" id="desk-cats"></span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn ghost" data-action="release">Liberar box</button>
+          <button class="btn ghost" data-action="logout">Salir</button>
+        </div>
+      </div>
+      <div class="op-layout">
+        <div class="card current-ticket" id="current"></div>
+        <div class="card">
+          <h3 style="margin-top:0">Cola de la sucursal</h3>
+          <ul class="queue-list" id="queue"></ul>
+          <p class="muted" style="margin-bottom:0">Atendidos hoy por vos: <strong id="attended">0</strong></p>
+          <p class="muted" style="font-size:.85rem">Atajos: <kbd>Espacio</kbd> llamar · <kbd>I</kbd> iniciar · <kbd>F</kbd> finalizar · <kbd>R</kbd> re-llamar · <kbd>A</kbd> ausente</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.min.js"></script>
+  <script type="module" src="/js/operator.js"></script>
+</body>
+</html>

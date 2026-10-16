@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tótem</title>
+  <link rel="stylesheet" href="/brand.css" />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <header class="brand-bar">
+    <img class="logo" data-brand="logo" alt="" />
+    <div class="names"><span class="company" data-brand="company"></span><span class="tagline" data-brand="tagline"></span></div>
+    <div class="spacer"></div>
+    <div class="meta" id="branch-name"></div>
+  </header>
+
+  <main class="container" id="app">
+    <nav class="tabs" role="tablist" id="tabs" hidden>
+      <button role="tab" data-tab="walkin" aria-selected="true">Sacar turno</button>
+      <button role="tab" data-tab="checkin" aria-selected="false">Tengo cita</button>
+      <button role="tab" data-tab="book" aria-selected="false">Agendar cita</button>
+    </nav>
+
+    <!-- Turno presencial -->
+    <section data-panel="walkin" hidden>
+      <h1 style="margin-top:0">¿Qué trámite vas a realizar?</h1>
+      <div class="totem-grid" id="categories"></div>
+    </section>
+
+    <!-- Check-in de cita -->
+    <section data-panel="checkin" hidden>
+      <div class="card" style="max-width:520px">
+        <h2 style="margin-top:0">Registrar mi llegada</h2>
+        <p class="muted">Ingresá el mismo dato que usaste al agendar tu cita.</p>
+        <form id="checkin-form">
+          <div class="field">
+            <label for="checkin-id" class="id-label"></label>
+            <input id="checkin-id" name="customerIdentifier" required minlength="3" maxlength="80" autocomplete="off" />
+          </div>
+          <p class="error-msg" id="checkin-error"></p>
+          <button class="btn lg" type="submit">Confirmar llegada</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Agendar cita web -->
+    <section data-panel="book" hidden>
+      <div class="card" style="max-width:640px">
+        <h2 style="margin-top:0">Agendar cita previa</h2>
+        <form id="book-form">
+          <div class="field">
+            <label for="book-category">Trámite</label>
+            <select id="book-category" name="categoryId" required></select>
+          </div>
+          <div class="field">
+            <label for="book-date">Fecha</label>
+            <input id="book-date" name="date" type="date" required />
+          </div>
+          <div class="field">
+            <label>Horario</label>
+            <div class="slots" id="slots"><span class="muted">Elegí trámite y fecha.</span></div>
+          </div>
+          <div class="field">
+            <label for="book-id" class="id-label"></label>
+            <input id="book-id" name="customerIdentifier" required minlength="3" maxlength="80" autocomplete="off" />
+          </div>
+          <p class="error-msg" id="book-error"></p>
+          <button class="btn lg" type="submit" id="book-submit" disabled>Confirmar cita</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Ticket emitido / seguimiento -->
+    <section id="result" hidden></section>
+  </main>
+
+  <script src="/socket.io/socket.io.min.js"></script>
+  <script type="module" src="/js/totem.js"></script>
+</body>
+</html>

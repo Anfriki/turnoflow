@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pantalla de sala</title>
+  <link rel="stylesheet" href="/brand.css" />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body class="display">
+  <header class="brand-bar">
+    <img class="logo" data-brand="logo" alt="" />
+    <div class="names"><span class="company" data-brand="company"></span><span class="tagline" data-brand="tagline"></span></div>
+    <div class="spacer"></div>
+    <div class="meta"><span id="branch-name"></span><span class="conn-dot" id="conn" title="Conexión"></span></div>
+    <div class="clock" id="clock"></div>
+  </header>
+
+  <div id="app" style="display:contents">
+    <main class="display-main">
+      <section class="now-calling" id="now" aria-live="assertive">
+        <div class="label">Turno</div>
+        <div class="code" id="now-code">—</div>
+        <div class="desk" id="now-desk">Aguarde a ser llamado</div>
+        <div class="category" id="now-category"></div>
+      </section>
+      <section class="history">
+        <h2>Últimos llamados</h2>
+        <div id="history"></div>
+      </section>
+    </main>
+    <div class="display-waiting" id="waiting"></div>
+    <div class="ticker"><span id="ticker"></span></div>
+  </div>
+
+  <div class="sound-gate" id="sound-gate">
+    <div>🔊<br />Tocá la pantalla para activar el sonido<br /><small style="opacity:.7">(requisito del navegador; sólo una vez)</small></div>
+  </div>
+
+  <script src="/socket.io/socket.io.min.js"></script>
+  <script type="module" src="/js/display.js"></script>
+</body>
+</html>

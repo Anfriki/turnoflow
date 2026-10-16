@@ -1,0 +1,9 @@
+Colocá aquí el sonido del llamado con el nombre:
+
+    ding-dong.mp3
+
+(o cambiá la ruta en brand.config.js → assets.callSound).
+
+Si el archivo no existe, la pantalla de sala genera automáticamente un
+"ding-dong" sintético con Web Audio, así que el sistema funciona igual.
+Recomendado: MP3 de 1–3 segundos, 128 kbps, volumen normalizado.

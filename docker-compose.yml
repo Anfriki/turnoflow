@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────
+#  Desarrollo:  docker compose up -d db        (sólo PostgreSQL)
+#  Todo junto:  docker compose --profile app up -d --build
+# ─────────────────────────────────────────────────────────────
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: turnoflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: turnos
+      POSTGRES_PASSWORD: turnos
+      POSTGRES_DB: turnos_db
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U turnos -d turnos_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    profiles: ["app"]
+    build: .
+    container_name: turnoflow-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://turnos:turnos@db:5432/turnos_db?schema=public
+      JWT_SECRET: ${JWT_SECRET:-cambia-esto-por-un-secreto-largo-y-aleatorio-de-32+caracteres}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Argentina/Buenos_Aires}
+    ports:
+      - "3000:3000"
+    volumes:
+      # Marca blanca sin reconstruir la imagen
+      - ./brand.config.js:/app/brand.config.js:ro
+      - ./public/assets:/app/public/assets:ro
+
+volumes:
+  pgdata:
