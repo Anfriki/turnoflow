@@ -19,10 +19,11 @@
   <div id="app" style="display:contents">
     <main class="display-main">
       <section class="now-calling" id="now" aria-live="assertive">
-        <div class="label">Turno</div>
-        <div class="code" id="now-code">—</div>
+        <div class="label" id="now-label">Bienvenido</div>
+        <div class="code" id="now-main">—</div>
+        <div class="pass" id="now-pass"></div>
         <div class="desk" id="now-desk">Aguarde a ser llamado</div>
-        <div class="category" id="now-category"></div>
+        <div class="category" id="now-sub"></div>
       </section>
       <section class="history">
         <h2>Últimos llamados</h2>
@@ -34,7 +35,7 @@
   </div>
 
   <div class="sound-gate" id="sound-gate">
-    <div>🔊<br />Tocá la pantalla para activar el sonido<br /><small style="opacity:.7">(requisito del navegador; sólo una vez)</small></div>
+    <div>🔊<br />Toque la pantalla para activar el sonido<br /><small style="opacity:.7">(requisito del navegador; sólo una vez)</small></div>
   </div>
 
   <script src="/socket.io/socket.io.min.js"></script>

@@ -9,14 +9,20 @@ export interface BrandConfig {
   colors: Record<string, string>;
   fontFamily: string;
   borderRadius: string;
+  citizen: { allowedOrigins: ('V' | 'E' | 'J' | 'G')[]; originLabels: Record<string, string> };
+  deskLabel: string;
   display: {
+    callBy: 'cedula' | 'ticket';
+    maskCedula: boolean;
     voiceEnabled: boolean;
-    voiceTemplate: string;
+    voiceTemplateCedula: string;
+    voiceTemplateTicket: string;
     voiceLang: string;
     historySize: number;
     ticker: string;
   };
-  totem: { resetSeconds: number; customerIdentifierLabel: string };
+  totem: { resetSeconds: number; preferentialEnabled: boolean };
+  attention: { preferentialBoost: number; minResolutionNotes: number };
   appointments: {
     openingTime: string;
     closingTime: string;

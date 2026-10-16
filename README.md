@@ -1,21 +1,26 @@
-# 🎫 TurnoFlow — Sistema de Turnos y Gestión de Colas
+# 🎫 TurnoFlow — Atención al Ciudadano
 
-Sistema de turnos para atención al cliente, en **Node.js + TypeScript**, **PostgreSQL**, **Prisma** y **Socket.io**. Es marca blanca: cualquier empresa lo adapta a su identidad editando un solo archivo.
+Sistema de turnos y gestión de colas para la **Oficina de Atención al Ciudadano** de un Ministerio u Organismo Público. Usa **Node.js + TypeScript**, **PostgreSQL**, **Prisma** y **Socket.io**, y es marca blanca: se adapta a cualquier institución editando un archivo.
 
-Gestiona:
+Qué cubre:
 
-- **Turnos presenciales del día**: el cliente saca un ticket en el tótem (`A-001`, `R-015`…).
-- **Citas previas agendadas por web**: el cliente reserva una franja horaria y el día de la cita registra su llegada en el tótem.
-- **Despacho a boxes/ventanillas**: el operador presiona *Llamar siguiente* y el sistema asigna el próximo turno de forma segura aunque varios boxes llamen al mismo tiempo.
-- **Pantalla de sala (TV)**: muestra el turno llamado al instante, con sonido *ding‑dong* y aviso por voz.
+- **Registro de entrada por cédula.** El ciudadano elige el origen del documento (`V`, `E`, `J`, `G`) y escribe el número. El nombre se **autocompleta** desde un servicio de identidad (SAIME, nómina o padrón) o desde la cache local, y sigue siendo editable.
+- **Motivos de atención dinámicos.** Es una tabla maestra que administra el propio ministerio, sin trámites fijos en el código. Cada motivo pertenece a una **Dirección** o unidad.
+- **Atención preferencial** para tercera edad, embarazadas y personas con discapacidad, con prioridad en la cola.
+- **Citas previas por web**, con check-in por cédula el día de la cita.
+- **Despacho a taquillas** seguro ante concurrencia (`FOR UPDATE SKIP LOCKED`).
+- **Pantalla de sala:** *"Cédula V-12.345.678 · pase a · Taquilla N° 3"*, con sonido y voz.
+- **Cierre obligatorio con resultado de la petición:** resuelto, en trámite, remitido, no procede o pendiente de recaudos; con observaciones y la dependencia de destino cuando se remite.
+- **Reportería ministerial:** filtros por fecha, año, mes, día, taquilla, funcionario, motivo, Dirección, estatus y resultado; resúmenes y exportación CSV para Excel.
 
 | Vista | URL | Quién la usa |
 |---|---|---|
-| Tótem / Web de clientes | `/totem.html` | Clientes (tótem táctil o celular) |
-| Agendar cita (enlace web) | `/totem.html?mode=web` | Clientes desde la web institucional |
-| Seguimiento del turno | `/totem.html?track=<id>` | Cliente en su celular (se muestra en el ticket) |
-| Panel de operador | `/operator.html` | Operadores, supervisores |
-| Pantalla de sala | `/display.html?branch=CENTRAL` | TV de la sala de espera |
+| Tótem / Registro de entrada | `/totem.html?branch=SEDE` | Ciudadanos (tótem táctil con teclado numérico) |
+| Agendar cita (enlace web) | `/totem.html?branch=SEDE&mode=web` | Ciudadanos desde el portal institucional |
+| Seguimiento del turno | `/totem.html?track=<id>` | Ciudadano en su celular (el enlace se muestra en el ticket) |
+| Panel de taquilla | `/operator.html` | Funcionarios de taquilla |
+| Pantalla de sala | `/display.html?branch=SEDE` | TV de la sala de espera |
+| Consultas y reportes | `/consultas.html` | Supervisores y administradores |
 
 ---
 
@@ -25,10 +30,14 @@ Gestiona:
 2. [Configuración de la base de datos](#2-configuración-de-la-base-de-datos)
 3. [Despliegue local](#3-despliegue-local)
 4. [Despliegue en producción](#4-despliegue-en-producción)
-5. [Personalización y cambio de marca](#5-personalización-y-cambio-de-marca)
-6. [Arquitectura](#6-arquitectura)
-7. [Concurrencia: cómo funciona "Llamar siguiente"](#7-concurrencia-cómo-funciona-llamar-siguiente)
-8. [Referencia de la API y de los eventos en tiempo real](#8-referencia-de-la-api-y-de-los-eventos-en-tiempo-real)
+5. [Personalización institucional](#5-personalización-institucional)
+6. [Identificación del ciudadano y consulta de cédula](#6-identificación-del-ciudadano-y-consulta-de-cédula)
+7. [Motivos de atención](#7-motivos-de-atención)
+8. [Taquillas y resolución de la petición](#8-taquillas-y-resolución-de-la-petición)
+9. [Reportería](#9-reportería)
+10. [Arquitectura](#10-arquitectura)
+11. [Concurrencia: cómo funciona "Llamar siguiente"](#11-concurrencia-cómo-funciona-llamar-siguiente)
+12. [Referencia de la API y eventos en tiempo real](#12-referencia-de-la-api-y-eventos-en-tiempo-real)
 
 ---
 
@@ -37,9 +46,9 @@ Gestiona:
 | Herramienta | Versión | Notas |
 |---|---|---|
 | **Node.js** | 20 LTS o superior (probado con 22 y 26) | `node -v` |
-| **npm** | 10+ (o **pnpm** 9+) | viene con Node |
-| **PostgreSQL** | 15+ recomendado (funciona desde 13) | se necesita `gen_random_uuid()`, nativo desde la 13 |
-| **Docker** *(opcional)* | Docker Desktop / Engine 24+ con Compose v2 | para levantar PostgreSQL con un comando |
+| **npm** | 10+ (o **pnpm** 9+) | En npm 11 los scripts de instalación de Prisma y esbuild ya están aprobados en `package.json → allowScripts` |
+| **PostgreSQL** | 15+ recomendado (funciona desde 13; probado en 14) | Se usa `gen_random_uuid()`, nativo desde la 13 |
+| **Docker** *(opcional)* | Engine 24+ con Compose v2 | Para levantar PostgreSQL con un comando |
 
 ---
 
@@ -47,18 +56,15 @@ Gestiona:
 
 ### 2.1 Levantar PostgreSQL
 
-**Opción A, con Docker (recomendada):**
+**Con Docker:**
 
 ```bash
-docker compose up -d db
+docker compose up -d db          # base turnos_db, usuario turnos / clave turnos, puerto 5432
 ```
 
-Esto crea la base `turnos_db` con usuario `turnos` y contraseña `turnos` en `localhost:5432`. Los datos persisten en el volumen `pgdata`.
-
-**Opción B, con un PostgreSQL instalado:**
+**Con un PostgreSQL ya instalado:**
 
 ```sql
--- psql -U postgres
 CREATE USER turnos WITH PASSWORD 'turnos';
 CREATE DATABASE turnos_db OWNER turnos;
 ```
@@ -66,81 +72,144 @@ CREATE DATABASE turnos_db OWNER turnos;
 ### 2.2 Archivo `.env`
 
 ```bash
-cp .env.example .env        # en Windows (PowerShell): Copy-Item .env.example .env
+cp .env.example .env        # PowerShell: Copy-Item .env.example .env
 ```
 
 | Variable | Ejemplo | Qué hace |
 |---|---|---|
-| `NODE_ENV` | `development` | `production` activa caché de estáticos y oculta detalles de errores. |
-| `PORT` | `3000` | Puerto HTTP. API, frontend y Socket.io comparten este puerto. |
-| `DATABASE_URL` | `postgresql://turnos:turnos@localhost:5432/turnos_db?schema=public` | Conexión con el formato `postgresql://USUARIO:CLAVE@HOST:PUERTO/BASE`. Si la clave tiene caracteres especiales, codificalos en URL (`@` → `%40`). |
-| `JWT_SECRET` | *(32+ caracteres)* | Firma los tokens de sesión. **Obligatorio y único por instalación.** Generalo con `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. |
-| `JWT_EXPIRES_IN` | `12h` | Duración de la sesión del operador (un turno laboral). |
-| `APP_TIMEZONE` | `America/Argentina/Buenos_Aires` | Zona horaria IANA del negocio. Define **cuándo empieza el día** (reinicio de `A-001`) y la hora de las citas. |
-| `RATE_LIMIT_PUBLIC_PER_MIN` | `120` | Máximo de turnos o citas emitidos por minuto desde una misma IP. Sólo aplica en producción. Si varios tótems salen por la misma IP (NAT), subilo. |
-| `CORS_ORIGINS` | `https://turnos.miempresa.com` | Sólo si el frontend se sirve desde otro dominio. Vacío = mismo origen. |
-| `COMPANY_NAME`, `COMPANY_TAGLINE`, `BRAND_PRIMARY_COLOR`, `BRAND_SECONDARY_COLOR` | — | *Opcionales.* Reemplazan los valores de `brand.config.js` sin tocar código. |
+| `NODE_ENV` | `development` | `production` activa caché de estáticos, límites de pedidos y oculta detalles de errores |
+| `PORT` | `3000` | Puerto HTTP. API, vistas y Socket.io comparten el puerto. |
+| `DATABASE_URL` | `postgresql://turnos:turnos@localhost:5432/turnos_db?schema=public` | Conexión a PostgreSQL. Si la clave tiene caracteres especiales, codificalos en URL (`@` → `%40`). |
+| `JWT_SECRET` | *(32+ caracteres)* | Firma de sesiones. **Obligatorio y único por instalación.** Generalo con `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. |
+| `JWT_EXPIRES_IN` | `12h` | Duración de la sesión del funcionario |
+| `APP_TIMEZONE` | `America/Caracas` | Zona horaria del organismo. Define cuándo empieza el día (reinicio de `N-001`), los horarios de citas y el desglose año, mes, día y hora. |
+| `RATE_LIMIT_PUBLIC_PER_MIN` | `120` | Turnos o citas por minuto y por IP. Sólo aplica en producción. Si varios tótems salen por la misma IP (NAT), subilo. |
+| `CORS_ORIGINS` | `https://turnos.gob.ve` | Sólo si las vistas se sirven desde otro dominio |
+| `CITIZEN_LOOKUP_PROVIDER` | `mock` | `mock` (registro simulado), `http` (servicio real) o `none` (sólo cache local). Ver [sección 6](#6-identificación-del-ciudadano-y-consulta-de-cédula). |
+| `CITIZEN_LOOKUP_URL` / `CITIZEN_LOOKUP_TOKEN` | — | Endpoint y token del servicio de identidad. Obligatorios con `http`. |
+| `CITIZEN_LOOKUP_TIMEOUT_MS` | `3000` | Si el servicio externo no responde en ese tiempo, se sigue con la cache |
+| `CITIZEN_CACHE_TTL_DAYS` | `180` | Días que un nombre obtenido del servicio externo se reutiliza sin volver a consultar |
+| `CITIZEN_LOOKUP_MASK_PUBLIC` | `false` | `true` hace que el tótem reciba el nombre enmascarado (`M**** G*******`) |
+| `RATE_LIMIT_LOOKUP_PER_MIN` | `30` | Consultas públicas de cédula por minuto y por IP. Frena la enumeración de datos personales. |
+| `COMPANY_NAME`, `COMPANY_TAGLINE`, `BRAND_*_COLOR` | — | *Opcionales.* Reemplazan los valores de `brand.config.js`. |
 
-El servidor valida estas variables con Zod al arrancar. Si falta alguna o es inválida, se detiene con un mensaje claro.
+El servidor valida estas variables con Zod al arrancar. Si alguna falta o es inválida, se detiene con un mensaje claro.
 
 ### 2.3 Migraciones y datos de prueba
 
 ```bash
 npm install
-npm run db:migrate     # prisma migrate deploy → crea tablas, enums, índices y restricciones
-npm run db:seed        # datos de ejemplo (idempotente: se puede correr varias veces)
+npm run db:migrate     # aplica las migraciones pendientes
+npm run db:seed        # datos de ejemplo (idempotente)
 ```
+
+| Migración | Contenido |
+|---|---|
+| `20261016000000_init` | Esquema base: sedes, colas, boxes, usuarios, turnos, contadores e índices de despacho |
+| `20261017000000_ministerio_atencion_ciudadano` | Adaptación ministerial. Ver detalle abajo. |
+
+La segunda migración hace lo siguiente:
+
+- Renombra `service_categories` → `attention_reasons` y `desk_categories` → `desk_reasons`.
+- Agrega el número de taquilla.
+- Agrega a `tickets` la cédula (origen y número), el nombre del ciudadano, la atención preferencial, la instantánea de taquilla y funcionario, la resolución, el desglose temporal y las duraciones.
+- Crea la cache `citizens` y cambia la numeración a sede + prefijo + día.
+
+**Actualizar una instalación anterior.** Si la instalación ya tenía datos, `npm run db:migrate` la actualiza sin perderlos:
+
+- Los turnos existentes se completan: se rescatan los dígitos del identificador viejo, se calcula el desglose temporal con `America/Caracas`, y las atenciones finalizadas quedan como `RESUELTO` con una nota.
+- Las nuevas validaciones de formato se crean `NOT VALID`: rigen para registros nuevos y no rechazan el histórico.
 
 Para borrar todo y empezar de cero (**destruye los datos**): `npm run db:reset`.
 
 **El seed crea:**
 
-- **Sucursales:** `CENTRAL` (Casa Central) y `NORTE` (Sucursal Norte).
-- **Colas de CENTRAL:** `P` Atención Prioritaria (prioridad 10), `A` Cajas, `C` Atención Comercial y `R` Reclamos.
-- **Boxes de CENTRAL:** Box 1 a Box 5. Cada uno atiende ciertas colas; Box 5 atiende todas.
+**Sedes:**
+- `SEDE` (Sede Central): 11 motivos y 7 taquillas. La Taquilla N° 7 atiende todos los motivos.
+- `REGIONAL` (Oficina Regional): 5 motivos y 2 taquillas.
 
-| Usuario | Contraseña | Rol | Sucursal |
+**Motivos por Dirección:**
+
+| Dirección | Motivos |
+|---|---|
+| Nómina y Pagos | Reclamo de Nómina (`NOM-01`), Recibos de Pago / ARC (`NOM-03`) |
+| Recursos Humanos | Constancia de Trabajo (`NOM-02`), Actualización de Datos (`RRHH-01`), Vacaciones, Permisos y Reposos (`RRHH-02`) |
+| Seguridad Social | Solicitud de Jubilación (`JUB-01`), Solicitud de Pensión (`JUB-02`) |
+| Archivo | Entrega de Documentos / Recaudos (`DOC-01`) |
+| Consultoría Jurídica | Asesoría Legal Laboral (`JUR-01`) |
+| Atención al Ciudadano | Consultas Generales (`OAC-01`), Denuncias, Quejas y Sugerencias (`OAC-02`) |
+
+**Funcionarios:**
+
+| Usuario | Contraseña | Rol | Sede |
 |---|---|---|---|
-| `admin@turnos.local` | `Admin123!` | ADMIN | todas |
-| `supervisor@turnos.local` | `Super123!` | SUPERVISOR | CENTRAL |
-| `operador1@turnos.local` / `operador2@…` / `operador3@…` | `Operador123!` | OPERATOR | CENTRAL |
-| `norte@turnos.local` | `Operador123!` | OPERATOR | NORTE |
+| `admin@ministerio.local` | `Admin123!` | ADMIN | todas |
+| `supervisor@ministerio.local` | `Super123!` | SUPERVISOR | SEDE |
+| `taquilla1@ministerio.local` … `taquilla4@ministerio.local` | `Taquilla123!` | OPERATOR | SEDE |
+| `regional@ministerio.local` | `Taquilla123!` | OPERATOR | REGIONAL |
 
-> ⚠️ Cambiá o desactivá estos usuarios antes de pasar a producción (`PATCH /api/admin/users/:id`).
+**Cédulas del registro simulado (`mock`):**
+
+| Cédula | Nombre |
+|---|---|
+| `V-12345678` | María Alejandra González Pérez |
+| `V-87654321` | José Gregorio Rodríguez Méndez |
+| `V-5123456` | Carmen Elena Silva de Ramírez |
+| `E-84123456` | Giuseppe Antonio Russo Bianchi |
+| `J-123456789` | Distribuidora Ejemplo C.A. |
+
+Cualquier otra cédula responde "no registrada" y el ciudadano escribe su nombre.
+
+> ⚠️ Cambiá o desactivá los usuarios de prueba antes de pasar a producción (`PATCH /api/admin/users/:id`).
 
 ### 2.4 Esquema
 
 - **Esquema Prisma:** [`prisma/schema.prisma`](prisma/schema.prisma)
-- **SQL de la migración inicial:** [`prisma/migrations/20261016000000_init/migration.sql`](prisma/migrations/20261016000000_init/migration.sql)
+- **SQL:** [`prisma/migrations/`](prisma/migrations/)
 
 | Tabla | Contenido |
 |---|---|
-| `branches` | Sucursales |
-| `service_categories` | Colas o trámites, con letra de prefijo, prioridad y duración estimada |
-| `desks` | Boxes o ventanillas, con el operador actual (`current_operator_id` UNIQUE: un operador ocupa un solo box) |
-| `desk_categories` | Qué colas atiende cada box. Un box sin filas aquí atiende todas. |
-| `users` | Operadores, supervisores y admins. La contraseña se guarda con bcrypt. |
-| `tickets` | Turnos, con estado, tipo, métricas de tiempo y `service_date` (día de negocio) |
-| `daily_counters` | Correlativo diario por cola, para la numeración atómica |
+| `branches` | Sedes u oficinas de atención |
+| `attention_reasons` | **Motivos de atención**: código, nombre, descripción, Dirección, prefijo del turno, prioridad, duración estimada, si admite citas, activo |
+| `desks` | **Taquillas**: número (`Taquilla N° 3`), etiqueta y funcionario actual |
+| `desk_reasons` | Qué motivos atiende cada taquilla. Sin filas, atiende todos. |
+| `users` | Funcionarios (ADMIN, SUPERVISOR, OPERATOR), con contraseña bcrypt |
+| `citizens` | Cache local de ciudadanos: cédula, nombre, origen del dato y última visita |
+| `tickets` | Turnos y atenciones (detalle abajo) |
+| `daily_counters` | Correlativo diario por sede, prefijo y día |
+
+**Campos de `tickets`:**
+
+| Grupo | Columnas |
+|---|---|
+| Ciudadano | `id_origin` (`V`/`E`/`J`/`G`), `id_number`, `citizen_name`, `preferential_type` |
+| Flujo | `status` (`WAITING` → `CALLED` → `IN_SERVICE` → `ATTENDED` / `ABSENT` / `CANCELLED`), `type` (`WALK_IN` / `SCHEDULED`), `scheduled_at`, `priority_level` |
+| Asignación | `desk_id`, `desk_number`, `operator_id`, `operator_name`. Número y nombre son una **instantánea** tomada al llamar, para que la auditoría no cambie si después se renumera una taquilla o se renombra un usuario. |
+| Resolución | `resolution_status`, `resolution_notes`, `destination_department` |
+| Marcas de tiempo | `created_at`, `checked_in_at`, `called_at`, `started_at` (inicio de la atención), `finished_at` |
+| Desglose temporal | `year`, `month`, `day`, `hour`, `day_of_week` (ISO: 1 = lunes … 7 = domingo), en `APP_TIMEZONE` |
+| Duraciones | `wait_seconds` (llegada → llamado) y `service_seconds` (inicio → fin), precalculadas |
 
 **Índices y restricciones clave:**
 
-| Nombre | Definición | Para qué sirve |
+| Nombre | Definición | Para qué |
 |---|---|---|
-| `idx_tickets_dispatch` | `(branch_id, status, priority_level DESC, created_at ASC)` | Índice del despacho "Llamar siguiente" |
-| `idx_tickets_waiting` | parcial `WHERE status='WAITING'` | Índice más chico para la cola viva |
-| `uq_tickets_daily_code` | `UNIQUE(branch_id, category_id, code, service_date)` | Un código no se repite en el mismo día |
-| `uq_tickets_desk_active` | `UNIQUE(desk_id) WHERE status IN ('CALLED','IN_SERVICE')` | Un box nunca tiene dos turnos activos |
-| `ck_tickets_scheduled_at` | `CHECK` | Una cita (`SCHEDULED`) siempre tiene `scheduled_at` |
+| `idx_tickets_dispatch` | `(branch_id, status, priority_level DESC, created_at ASC)` | "Llamar siguiente" |
+| `uq_tickets_daily_code` | `UNIQUE(branch_id, code, service_date)` | Un código no se repite en el día |
+| `uq_tickets_desk_active` | `UNIQUE(desk_id) WHERE status IN ('CALLED','IN_SERVICE')` | Una taquilla nunca tiene dos turnos activos |
+| `idx_tickets_citizen` | `(id_origin, id_number, service_date)` | Búsqueda por cédula |
+| `idx_tickets_report_date` | `(branch_id, year, month, day)` | Reportes por año, mes y día |
+| `ck_tickets_attended_resolution` | `CHECK` | No se puede cerrar una atención sin resultado |
+| `ck_tickets_referral_destination` | `CHECK` | `REMITIDO` exige dependencia de destino |
+| `ck_tickets_id_number`, `ck_tickets_temporal` | `CHECK` | Formato de la cédula y rangos de mes, día, hora y día de la semana |
 
-> **¿Por qué `service_date` y no `DATE(created_at)`?** En PostgreSQL, `DATE(timestamptz)` depende de la zona horaria de la sesión. Por eso no es `IMMUTABLE` y no se puede usar en un índice único. Además, una cita se agenda hoy para otro día. `service_date` guarda explícitamente el **día de negocio** en `APP_TIMEZONE`, y la restricción diaria se apoya en esa columna.
+> **¿Por qué el desglose temporal se guarda y no se calcula en cada consulta?** Para que los reportes y las auditorías filtren con `WHERE year = 2026 AND month = 10` directamente, con índice y sin conversiones de zona horaria en SQL. En las citas, el desglose refleja la hora agendada de la atención y no la hora en que se reservó.
 
 **Para cambiar el esquema más adelante:**
 
 ```bash
 npx prisma migrate dev --create-only --name agrega_campo_x
-# Revisá el SQL generado: Prisma no conoce los índices parciales ni los CHECK
-# de la migración inicial y podría proponer borrarlos. Quitá esas líneas.
+# Revisá el SQL: Prisma no conoce los índices parciales ni los CHECK y podría proponer borrarlos.
 npx prisma migrate dev
 ```
 
@@ -149,31 +218,23 @@ npx prisma migrate dev
 ## 3. Despliegue local
 
 ```bash
-# 1. Dependencias
 npm install
-
-# 2. Base de datos (ver sección 2)
 docker compose up -d db
 cp .env.example .env
 npm run db:migrate
 npm run db:seed
-
-# 3. Backend + frontend (monolito con recarga automática)
-npm run dev
+npm run dev                     # backend + vistas con recarga automática
 ```
 
-El backend sirve también el frontend: no hay un segundo servidor que levantar. Abrí:
+El backend sirve también las vistas, así que no hay un segundo servidor que levantar.
 
 - **Inicio:** http://localhost:3000
-- **Tótem:** http://localhost:3000/totem.html?branch=CENTRAL
-- **Operador:** http://localhost:3000/operator.html (entrá con `operador1@turnos.local` / `Operador123!`)
-- **TV:** http://localhost:3000/display.html?branch=CENTRAL. Tocá la pantalla una vez para habilitar el sonido.
-
-**Prueba rápida:** abrí la TV, el tótem y dos operadores (en ventanas de incógnito distintas). Sacá varios turnos y presioná *Llamar siguiente* en los dos boxes.
+- **Tótem:** http://localhost:3000/totem.html?branch=SEDE. Probá la cédula `V` `12345678` y el nombre se completa solo.
+- **Taquilla:** http://localhost:3000/operator.html (`taquilla1@ministerio.local` / `Taquilla123!`)
+- **TV:** http://localhost:3000/display.html?branch=SEDE. Tocá la pantalla una vez para habilitar el sonido.
+- **Consultas:** http://localhost:3000/consultas.html (`supervisor@ministerio.local` / `Super123!`)
 
 ### Prueba de concurrencia automatizada
-
-Con el servidor corriendo y el seed cargado:
 
 ```bash
 npm run test:concurrency          # N=40 por defecto; ej.: N=200 npm run test:concurrency
@@ -181,22 +242,16 @@ npm run test:concurrency          # N=40 por defecto; ej.: N=200 npm run test:co
 
 El script hace lo siguiente:
 
-1. Emite N turnos **en paralelo** y verifica que no haya códigos duplicados.
-2. Pone a tres boxes a llamar y finalizar turnos al mismo tiempo, a máxima velocidad.
-3. Verifica que **ningún turno se haya asignado dos veces**.
-
-### Scripts disponibles
+1. Emite N turnos en paralelo, con cédulas distintas, y verifica que no haya códigos duplicados.
+2. Pone a tres taquillas a llamar y cerrar atenciones a máxima velocidad.
+3. Verifica que **ningún ciudadano se asigne dos veces**.
 
 | Script | Acción |
 |---|---|
-| `npm run dev` | Servidor en modo desarrollo (tsx watch) |
-| `npm run build` | `prisma generate` + compilación TypeScript a `dist/` |
-| `npm start` | Ejecuta el build de producción |
-| `npm run typecheck` | Verificación de tipos sin emitir archivos |
-| `npm run db:migrate` | Aplica las migraciones pendientes |
-| `npm run db:seed` | Carga los datos de ejemplo |
-| `npm run db:reset` | Borra la base y vuelve a migrar y sembrar |
-| `npm run db:studio` | Prisma Studio (explorador visual de la base) |
+| `npm run dev` | Servidor de desarrollo (tsx watch) |
+| `npm run build` / `npm start` | Build de producción y ejecución |
+| `npm run typecheck` | Verificación de tipos |
+| `npm run db:migrate` / `db:seed` / `db:reset` / `db:studio` | Base de datos |
 | `npm run test:concurrency` | Prueba de carrera de "Llamar siguiente" |
 
 ---
@@ -205,41 +260,38 @@ El script hace lo siguiente:
 
 ### 4.1 Variables críticas
 
-| Variable | Requisito en producción |
+| Variable | Requisito |
 |---|---|
 | `NODE_ENV` | `production` |
-| `DATABASE_URL` | Base gestionada o con backups. Agregá `?sslmode=require` si el proveedor lo exige. Para pools tipo PgBouncer, sumá `&pgbouncer=true&connection_limit=10`. |
-| `JWT_SECRET` | Aleatorio, 48+ bytes, **distinto en cada entorno** y nunca versionado |
-| `APP_TIMEZONE` | La zona horaria real de las sucursales |
-| `PORT` | El que asigne la plataforma (Render y Railway lo inyectan solos) |
+| `DATABASE_URL` | Base con respaldos. Agregá `?sslmode=require` si corresponde. |
+| `JWT_SECRET` | Aleatorio, 48+ bytes, distinto en cada entorno y nunca versionado |
+| `APP_TIMEZONE` | La zona horaria real del organismo |
+| `CITIZEN_LOOKUP_PROVIDER` | `http` (con URL y token) o `none`. **No dejes `mock` en producción.** |
 
 ### 4.2 Build
 
 ```bash
 npm ci
-npm run build              # genera el cliente Prisma y compila a dist/
-npm run db:migrate         # prisma migrate deploy (nunca "migrate dev" en producción)
-npm start                  # node dist/src/server.js
+npm run build          # prisma generate + compilación TypeScript a dist/
+npm run db:migrate     # prisma migrate deploy (nunca "migrate dev" en producción)
+npm start
 ```
 
-El frontend es HTML/CSS/JS con ES Modules y **no necesita bundling**. Se sirve tal cual desde `public/` con caché de 1 hora. Los textos y colores de marca se leen en tiempo de ejecución desde `/api/brand` y `/brand.css`, así que cambiar la marca **no requiere recompilar**: basta con reiniciar el proceso.
+Las vistas son HTML/CSS/JS con ES Modules y no necesitan bundling. Textos, colores y reglas de `brand.config.js` se leen en tiempo de ejecución: cambiarlos sólo requiere reiniciar el proceso.
 
-### 4.3 Opción A: VPS con PM2 + Nginx
+### 4.3 VPS con PM2 + Nginx
 
 ```bash
 npm i -g pm2
 npm run build && npm run db:migrate
-pm2 start ecosystem.config.cjs
-pm2 save && pm2 startup     # arranque automático al reiniciar el servidor
-pm2 logs turnoflow
+pm2 start ecosystem.config.cjs && pm2 save && pm2 startup
 ```
 
-Nginx como proxy inverso, con soporte de WebSocket (indispensable para Socket.io):
+Nginx con soporte de WebSocket (indispensable para Socket.io):
 
 ```nginx
 server {
-    server_name turnos.miempresa.com;
-
+    server_name turnos.ministerio.gob.ve;
     location / {
         proxy_pass         http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -248,286 +300,370 @@ server {
         proxy_set_header   Host $host;
         proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
-        proxy_read_timeout 1h;     # conexiones de la TV abiertas todo el día
+        proxy_read_timeout 1h;
     }
-
-    listen 443 ssl;   # certbot --nginx -d turnos.miempresa.com
+    listen 443 ssl;
 }
 ```
 
-### 4.4 Opción B: Docker
+### 4.4 Docker
 
 ```bash
 JWT_SECRET=$(openssl rand -hex 48) docker compose --profile app up -d --build
 ```
 
-- La imagen aplica `prisma migrate deploy` al arrancar.
-- Para cargar el seed una vez: `docker compose exec app npx tsx prisma/seed.ts`. Requiere dependencias de desarrollo; como alternativa, corré `npm run db:seed` desde tu equipo apuntando a la base.
-- `brand.config.js` y `public/assets/` se montan como volúmenes: cambiás la marca sin reconstruir la imagen.
+La imagen aplica las migraciones al arrancar. `brand.config.js` y `public/assets/` se montan como volúmenes.
 
-### 4.5 Opción C: Render o Railway
+### 4.5 Render o Railway
 
 | Campo | Valor |
 |---|---|
-| Build command | `npm ci && npm run build` |
-| Pre-deploy / Release command | `npx prisma migrate deploy` |
-| Start command | `npm start` |
-| Base de datos | PostgreSQL gestionado. Copiá su URL interna a `DATABASE_URL`. |
+| Build | `npm ci && npm run build` |
+| Pre-deploy | `npx prisma migrate deploy` |
+| Start | `npm start` |
 | Health check | `GET /health` |
-
-Ambas plataformas soportan WebSockets sin configuración extra.
 
 ### 4.6 Recomendaciones operativas
 
-- **HTTPS siempre.** Lo necesitan el JWT y la API de voz en algunos navegadores.
-- **TV de sala:** usá Chrome en modo kiosco, por ejemplo `chrome --kiosk --autoplay-policy=no-user-gesture-required "https://…/display.html?branch=CENTRAL"`. Con ese flag no hace falta tocar la pantalla para habilitar el sonido. La TV se reconecta sola si se corta la red.
-- **Tótem:** modo kiosco con `?branch=CODIGO` fijo en la URL.
-- **Backups:** `pg_dump` diario de `turnos_db`.
-- **Escalado horizontal:** el proceso es *stateful* para Socket.io. Si necesitás más de una instancia, agregá [`@socket.io/redis-adapter`](https://socket.io/docs/v4/redis-adapter/) en `src/sockets/index.ts` y *sticky sessions* en el balanceador. La lógica de despacho ya es segura entre instancias porque se apoya en los locks de PostgreSQL.
+- **HTTPS siempre.** El sistema maneja datos personales: cédula y nombre.
+- **TV:** usá Chrome en modo kiosco, por ejemplo `chrome --kiosk --autoplay-policy=no-user-gesture-required "https://…/display.html?branch=SEDE"`.
+- **Tótem:** modo kiosco con `?branch=CODIGO` fijo y pantalla táctil. El teclado numérico está en pantalla.
+- **Respaldos:** `pg_dump` diario. La tabla `tickets` es el registro de auditoría de la atención.
+- **Más de una instancia:** agregá `@socket.io/redis-adapter`. El despacho ya es seguro entre instancias porque se apoya en los locks de PostgreSQL.
 
 ---
 
-## 5. Personalización y cambio de marca
-
-Todo lo visual se controla desde **un archivo** y **una carpeta**:
+## 5. Personalización institucional
 
 ```
 turnoflow/
-├── brand.config.js            ← nombre, eslogan, colores, voz, horarios de citas
+├── brand.config.js            ← nombre, eslogan, colores, llamado en TV, reglas de atención y de citas
 └── public/assets/
-    ├── logo.png               ← logotipo (reemplazar manteniendo el nombre)
-    ├── favicon.ico            ← ícono de la pestaña
-    └── audio/
-        └── ding-dong.mp3      ← sonido del llamado en la TV
+    ├── logo.png               ← escudo o logotipo (reemplazar manteniendo el nombre)
+    ├── favicon.ico
+    └── audio/ding-dong.mp3    ← sonido del llamado (si no existe, se genera uno sintético)
 ```
 
-Después de editar, **reiniciá el servidor** (`pm2 restart turnoflow`, o se recarga solo con `npm run dev`) y refrescá los navegadores.
+Después de editar, reiniciá el servidor.
 
-### 5.1 Nombre de la empresa y eslogan
-
-En [`brand.config.js`](brand.config.js):
-
-```js
-companyName: 'Banco Regional',
-tagline: 'Atención al Cliente',
-```
-
-También podés definirlos en `.env` (`COMPANY_NAME`, `COMPANY_TAGLINE`), que tiene prioridad. Así una misma imagen Docker sirve para varios clientes.
-
-### 5.2 Sucursales, colas y boxes
-
-Son datos de la base, no de configuración:
-
-- **Para la instalación inicial:** editá los arreglos `BRANCHES` y `USERS` en [`prisma/seed.ts`](prisma/seed.ts) y ejecutá `npm run db:seed`.
-- **Con el sistema en marcha:** usá la API de administración con un token de ADMIN (ver [sección 8](#8-referencia-de-la-api-y-de-los-eventos-en-tiempo-real)). Por ejemplo:
-
-```bash
-TOKEN=$(curl -s localhost:3000/api/auth/login -H 'content-type: application/json' \
-  -d '{"email":"admin@turnos.local","password":"Admin123!"}' | jq -r .token)
-
-curl -X POST localhost:3000/api/admin/categories -H "authorization: Bearer $TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{"branchId":"<uuid>","name":"Seguros","prefixLetter":"S","priorityLevel":0,"estimatedDurationMin":20}'
-```
-
-### 5.3 Logotipo, favicon y sonido
-
-| Asset | Ruta exacta | Recomendación |
-|---|---|---|
-| Logotipo | `public/assets/logo.png` | PNG con fondo transparente, unos 512×512 px o apaisado (se muestra con 44 px de alto) |
-| Favicon | `public/assets/favicon.ico` | ICO de 32×32 y 48×48 |
-| Sonido del llamado | `public/assets/audio/ding-dong.mp3` | MP3 de 1 a 3 s, volumen normalizado |
-
-Para usar otro nombre o formato (SVG, WAV…), cambiá las rutas en `brand.config.js → assets`. Si el MP3 del llamado no existe, la TV **genera un ding‑dong sintético** con Web Audio: el sistema suena igual desde el primer día.
-
-### 5.4 Colores corporativos
-
-En `brand.config.js → colors`. Cada clave se convierte en un token CSS `--brand-<clave-en-kebab-case>`, que el servidor publica en `/brand.css`:
-
-| Clave | Token CSS | Dónde se ve |
-|---|---|---|
-| `primary` | `--brand-primary` | Barra superior, botones principales, códigos de turno |
-| `primaryContrast` | `--brand-primary-contrast` | Texto sobre el color primario |
-| `secondary` | `--brand-secondary` | Recuadro "turno llamado" de la TV, colas prioritarias |
-| `background` / `surface` | `--brand-background` / `--brand-surface` | Fondo general y tarjetas |
-| `text` / `muted` | `--brand-text` / `--brand-muted` | Texto principal y secundario |
-| `success` / `warning` / `danger` | `--brand-success` … | Estados y acciones |
-| `displayBackground` / `displayText` | `--brand-display-*` | Tema oscuro de la TV |
-
-También son configurables `fontFamily` y `borderRadius`. Los estilos de [`public/css/app.css`](public/css/app.css) sólo consumen estos tokens: **no hace falta editar CSS** para cambiar de marca.
-
-### 5.5 Otros ajustes de `brand.config.js`
-
-| Sección | Opciones |
+| Clave de `brand.config.js` | Qué controla |
 |---|---|
-| `display` | `voiceEnabled`, `voiceTemplate` (`'Turno {code}, diríjase a {desk}'`), `voiceLang`, `historySize`, `ticker` (marquesina inferior) |
-| `totem` | `resetSeconds` (tiempo que se muestra el ticket emitido), `customerIdentifierLabel` |
-| `appointments` | `openingTime`, `closingTime`, `slotMinutes`, `workingDays`, `maxDaysAhead`, `checkInEarlyMinutes` |
+| `companyName`, `tagline` | Nombre del organismo y de la oficina. También se pueden definir por `.env`. |
+| `colors.*` | Paleta institucional. Cada clave se convierte en el token CSS `--brand-<clave>`, servido en `/brand.css`. |
+| `citizen.allowedOrigins` | Orígenes de documento habilitados, por ejemplo `['V', 'E']` si no se atiende a personas jurídicas |
+| `citizen.originLabels` | Textos de ayuda de cada origen |
+| `deskLabel` | Formato del nombre de la taquilla: `'Taquilla N° {number}'` o `'Taquilla {number2}'` (con dos dígitos: 01, 02…) |
+| `display.callBy` | `'cedula'` muestra "Cédula V-12.345.678 · pase a · Taquilla N° 3"; `'ticket'` llama por número de turno |
+| `display.maskCedula` | `true` muestra `V-12.345.***` en la TV. En ese caso la voz anuncia el turno y el número completo **nunca** llega a la pantalla. |
+| `display.voiceTemplateCedula` / `voiceTemplateTicket` | Texto de la voz. Variables: `{cedula}`, `{code}`, `{deskNumber}`, `{desk}`, `{reason}`. |
+| `totem.preferentialEnabled` | Mostrar la opción de atención preferencial |
+| `attention.preferentialBoost` | Puntos de prioridad que suma la atención preferencial (por defecto 50) |
+| `attention.minResolutionNotes` | Largo mínimo de las observaciones al cerrar una atención |
+| `appointments.*` | Horario, duración de franja, días hábiles y anticipación de las citas web |
+
+Las **sedes y taquillas** se cargan en [`prisma/seed.ts`](prisma/seed.ts) o con la API de administración. Los **motivos** se administran desde la vista de Consultas (ver [sección 7](#7-motivos-de-atención)).
 
 ---
 
-## 6. Arquitectura
+## 6. Identificación del ciudadano y consulta de cédula
+
+**Formato y validación (backend y frontend):**
+
+| Origen | Significado | Número |
+|---|---|---|
+| `V` | Venezolano | 4 a 8 dígitos |
+| `E` | Extranjero | 4 a 10 dígitos |
+| `J` | Persona jurídica (RIF) | 8 a 9 dígitos, con el verificador |
+| `G` | Ente gubernamental (RIF) | 8 a 9 dígitos |
+
+- Se aceptan puntos y guiones al escribir (`12.345.678`), pero se guardan sólo los dígitos.
+- Se muestra como `V-12.345.678` o `J-12345678-9`.
+- **Un ciudadano no puede tener dos turnos activos el mismo día en la misma sede.** Si tiene una cita sin presentar, el tótem le indica que use "Tengo cita".
+
+### `citizenLookupService`
+
+Implementación: [`src/modules/citizens/citizen-lookup.service.ts`](src/modules/citizens/citizen-lookup.service.ts)
+
+Al completar la cédula, el tótem consulta `GET /api/public/citizens/lookup?idOrigin=V&idNumber=12345678`. El servicio resuelve en este orden:
+
+1. **Cache local con dato externo vigente** (menos de `CITIZEN_CACHE_TTL_DAYS`). No sale a la red.
+2. **Proveedor externo** (SAIME, nómina, padrón o mock). Si responde, el dato se guarda en la cache.
+3. **Cache con dato cargado a mano** en un registro anterior, o con un dato externo vencido.
+4. **No encontrado.** El ciudadano escribe su nombre.
+
+Si el servicio externo falla o tarda más de `CITIZEN_LOOKUP_TIMEOUT_MS`, el error se registra y **nunca bloquea la emisión del turno**. El nombre confirmado en el tótem se guarda en la cache (`citizens`) junto con la fecha de la última visita.
+
+### Conectar el servicio real
+
+Los proveedores están en [`src/modules/citizens/citizen-providers.ts`](src/modules/citizens/citizen-providers.ts). Hay dos formas de conectar el servicio del organismo.
+
+**A. Servicio HTTP.**
+
+1. Definí en el `.env`:
+
+   ```env
+   CITIZEN_LOOKUP_PROVIDER=http
+   CITIZEN_LOOKUP_URL=https://servicio-identidad.interno/api/ciudadanos
+   CITIZEN_LOOKUP_TOKEN=<token>
+   ```
+
+2. El sistema llama a `GET <URL>?nacionalidad=V&cedula=12345678` con `Authorization: Bearer <token>`.
+3. Adaptá `mapHttpResponse()` al formato de respuesta del servicio. Por defecto entiende:
+   - `{ nombreCompleto }`
+   - `{ nombres, apellidos }`
+   - `{ primer_nombre, …, segundo_apellido }`
+   - cualquiera de ellos envuelto en `{ data: … }`
+
+   Un `404` se interpreta como "no registrado".
+
+**B. Proveedor propio.** Por ejemplo, una consulta SQL a la base de nómina:
+
+```ts
+export class NominaProvider implements CitizenProvider {
+  readonly name = 'NOMINA';
+  async lookup(idOrigin, idNumber) {
+    const row = await nominaDb.query('SELECT nombres || \' \' || apellidos AS n FROM trabajadores WHERE cedula = $1', [idNumber]);
+    return row ? { fullName: row.n } : null;
+  }
+}
+```
+
+Registralo en `createProvider()`.
+
+**Protección de datos personales:**
+
+- El endpoint público de consulta tiene su propio límite de pedidos (`RATE_LIMIT_LOOKUP_PER_MIN`) contra la enumeración de cédulas.
+- Con `CITIZEN_LOOKUP_MASK_PUBLIC=true` el tótem sólo ve el nombre enmascarado.
+- Los eventos que recibe la TV **no incluyen el nombre**, y pueden ocultar la cédula (`display.maskCedula`).
+- Nombre y cédula completos sólo llegan a funcionarios autenticados.
+
+---
+
+## 7. Motivos de atención
+
+Es una tabla maestra por sede, administrable sin tocar código.
+
+- **Tótem:** desplegable alimentado desde la base y **agrupado por Dirección**, con la descripción del trámite. Los cambios se ven al volver a la pantalla de inicio.
+- **Panel de administración** (vista *Consultas* → pestaña *Motivos de atención*): alta, edición, activar y desactivar. Pueden hacerlo ADMIN y los SUPERVISOR de esa sede.
+- **Eliminar:** sólo se permite si el motivo no tiene atenciones registradas. Si las tiene, se **desactiva**, para preservar el histórico de los reportes.
+- **Prefijo del turno:** varios motivos pueden compartir prefijo y numeración. Por ejemplo, *Reclamo de Nómina* y *Recibos de Pago* generan `N-001`, `N-002`…
+- **Prioridad:** la del motivo suma a la preferencial. El despacho ordena por prioridad efectiva y luego por orden de llegada.
+- **Taquillas:** cada una puede atender un subconjunto de motivos (`desk_reasons`). Sin asignación, atiende todos.
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/api/admin/reasons?branchId=&includeInactive=` | Listado, con la cantidad de usos |
+| POST | `/api/admin/reasons` | `{ branchId, code, name, department, prefixLetter, description?, priorityLevel?, estimatedDurationMin?, allowAppointments?, isActive? }` |
+| PATCH | `/api/admin/reasons/:id` | Edición parcial; `{ isActive: false }` lo desactiva |
+| DELETE | `/api/admin/reasons/:id` | `204`, o `409 REASON_IN_USE` si tiene atenciones |
+| GET | `/api/admin/departments` | Direcciones ya cargadas, para autocompletar |
+
+---
+
+## 8. Taquillas y resolución de la petición
+
+**Panel de taquilla:**
+
+- El encabezado muestra *"Taquilla N° 3 — Funcionario: Carmen Rosa Linares"*.
+- Al llamar a un ciudadano, la tarjeta muestra la cédula grande, el nombre, el motivo con su código, la Dirección, si es preferencial o cita, y las horas de llegada y llamado.
+- Acciones disponibles: **Iniciar atención**, **Re-llamar**, **Ausente**, **Devolver a la cola** y **Finalizar atención**.
+- Atajos de teclado: `Espacio` llama al siguiente, `I` inicia, `F` finaliza, `R` vuelve a llamar y `A` marca ausente.
+
+**Cierre obligatorio.** "Finalizar atención" abre un modal que no se puede saltear:
+
+| Estatus de la petición | Uso |
+|---|---|
+| `RESUELTO` | Trámite concluido satisfactoriamente |
+| `EN_TRAMITE` | Requiere seguimiento |
+| `REMITIDO` | Enviado a otra Dirección u organismo. Exige **Remitido a**, con autocompletado de dependencias conocidas. |
+| `NO_PROCEDE` | No aplica o le faltan requisitos |
+| `PENDIENTE_RECAUDOS` | El ciudadano debe consignar documentos |
+
+- Las observaciones son obligatorias (mínimo `attention.minResolutionNotes` caracteres).
+- La validación se aplica tres veces: en el modal, en la API (Zod) y en la base de datos (`CHECK`).
+- Al llamar se guardan la instantánea de taquilla y funcionario (`desk_number`, `operator_name`) y el tiempo de espera. Al cerrar se guarda la duración de la atención.
+
+---
+
+## 9. Reportería
+
+### Vista *Consultas* (`/consultas.html`)
+
+Es para SUPERVISOR (su sede) y ADMIN (todas las sedes).
+
+**Filtros combinables:**
+
+| Grupo | Filtros |
+|---|---|
+| Ciudadano | Cédula (origen y número), nombre parcial |
+| Fechas | Rango desde/hasta, año, mes, día |
+| Atención | Taquilla, funcionario, motivo, Dirección |
+| Estado | Estatus del flujo, resultado de la petición, tipo (presencial o cita), preferencial |
+
+**Pestañas:**
+
+- **Atenciones:** listado paginado. Al hacer clic en una fila se abre el **detalle completo** con las observaciones y en qué quedó la petición.
+- **Resumen:** totales del período, resultado de las peticiones, y desgloses por Dirección, motivo, taquilla, funcionario, hora de llegada, día de la semana y día. Cada desglose incluye atendidos, ausentes, espera media y atención media.
+- **Exportar CSV:** respeta los filtros. Usa separador `;` y UTF-8 con BOM para abrirse directo en Excel en español. Se neutralizan las fórmulas (inyección CSV) y el máximo es de 50.000 filas.
+
+### API
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/api/reports/attentions?…&page=&pageSize=` | Listado paginado (máx. 200 por página) |
+| GET | `/api/reports/attentions?…&format=csv` | Exportación CSV |
+| GET | `/api/reports/summary?…` | Totales y desgloses |
+| GET | `/api/reports/options` | Valores para los selectores: taquillas, funcionarios, motivos, Direcciones y sedes |
+
+**Parámetros de filtro:**
+
+| Tipo | Parámetros |
+|---|---|
+| Fecha y hora | `from`, `to` (YYYY-MM-DD, día de atención), `year`, `month`, `day`, `dayOfWeek` (1–7), `hour` (0–23) |
+| Taquilla y funcionario | `deskId`, `deskNumber`, `operatorId` |
+| Trámite | `reasonId`, `department` |
+| Estado | `status`, `resolutionStatus`, `type` (`WALK_IN`/`SCHEDULED`), `preferential` (`true`/`false`) |
+| Ciudadano | `idOrigin`, `idNumber`, `name` |
+| Alcance | `branchId` (sólo ADMIN) |
+
+Ejemplo: atenciones remitidas por la Taquilla N° 3 en octubre de 2026:
+
+```
+GET /api/reports/attentions?year=2026&month=10&deskNumber=3&resolutionStatus=REMITIDO
+```
+
+---
+
+## 10. Arquitectura
 
 ```
 turnoflow/
-├── brand.config.js                 # Marca blanca
-├── docker-compose.yml · Dockerfile · ecosystem.config.cjs
+├── brand.config.js                       # Configuración institucional
 ├── prisma/
-│   ├── schema.prisma               # Modelo de datos
-│   ├── migrations/…_init/migration.sql   # DDL + índices parciales + CHECKs
-│   └── seed.ts                     # Datos de ejemplo
-├── scripts/concurrency-test.ts     # Prueba de carrera
+│   ├── schema.prisma
+│   ├── migrations/                       # init + ministerio_atencion_ciudadano
+│   └── seed.ts                           # Sedes, motivos por Dirección, taquillas, funcionarios
+├── scripts/concurrency-test.ts
 ├── src/
-│   ├── server.ts                   # Arranque HTTP + Socket.io
-│   ├── app.ts                      # Express: seguridad, rutas, estáticos, /brand.css
-│   ├── config/  env.ts (Zod) · brand.ts
-│   ├── db/prisma.ts
-│   ├── lib/     errors.ts · time.ts (día de negocio, formato A-001)
-│   ├── middleware/  auth.ts (JWT + roles) · validate.ts (Zod) · error.ts
-│   ├── sockets/index.ts            # ★ Servicio de tiempo real (salas y eventos)
+│   ├── server.ts · app.ts
+│   ├── config/   env.ts (Zod) · brand.ts
+│   ├── lib/      cedula.ts (validación/formato/máscara) · time.ts (día de negocio, desglose temporal)
+│   ├── middleware/  auth.ts (JWT + roles) · validate.ts · error.ts
+│   ├── sockets/index.ts                  # ticket:called · queue:updated · ticket:updated
 │   └── modules/
-│       ├── auth/        login, /me
-│       ├── public/      tótem, citas, seguimiento, snapshot para la TV
-│       ├── tickets/     tickets.service.ts (emisión atómica, citas, check-in)
-│       │                queue.service.ts (snapshot de la cola) · ticket.dto.ts
-│       ├── operator/    dispatcher.service.ts ★ (Llamar siguiente, ciclo de vida, boxes)
-│       └── admin/       ABM de sucursales/colas/boxes/usuarios, métricas, anulación
-└── public/                          # Frontend (sin build)
-    ├── index.html · totem.html · operator.html · display.html
+│       ├── citizens/   citizen-lookup.service.ts ★ · citizen-providers.ts (mock / http / propio)
+│       ├── tickets/    tickets.service.ts (emisión, citas, check-in) · queue.service.ts · ticket.dto.ts
+│       ├── operator/   dispatcher.service.ts ★ (llamar siguiente, cierre con resolución)
+│       ├── reports/    reports.service.ts · reports.routes.ts ★
+│       ├── admin/      motivos (CRUD) · taquillas · usuarios · sedes
+│       ├── public/     tótem, consulta de cédula, citas, seguimiento, TV
+│       └── auth/
+└── public/
+    ├── totem.html · operator.html · display.html · consultas.html · index.html
     ├── css/app.css
-    ├── js/  api.js · brand.js · sound.js · totem.js · operator.js · display.js
-    └── assets/  logo.png · favicon.ico · audio/
+    └── js/  citizen-form.js (cédula + autocompletado + teclado) · labels.js · totem.js
+             operator.js · display.js · consultas.js · sound.js · api.js · brand.js
 ```
 
-### Ciclo de vida de un turno
+### Ciclo de vida de una atención
 
 ```
-               ┌──────── cancelar (cliente / supervisor) ───────► CANCELLED
-               │
- WALK_IN ──► WAITING ──Llamar siguiente──► CALLED ──Iniciar──► IN_SERVICE ──Finalizar──► ATTENDED
-               ▲                  (ticket:called → TV)  │  │
- SCHEDULED ──► │ (despachable                           │  └──Ausente──► ABSENT
- (cita web)    │  tras check-in)                        │
-               └────────────── Devolver a la cola ──────┘   Re-llamar: CALLED → CALLED (vuelve a sonar)
+ Tótem (cédula + motivo) ─► WAITING ──Llamar siguiente──► CALLED ──Iniciar──► IN_SERVICE ──Finalizar + resolución──► ATTENDED
+ Cita web ─(check-in)──────►   ▲          (TV: "Cédula … pase a Taquilla N° X")  │    RESUELTO · EN_TRAMITE · REMITIDO
+                               │                                                  │    NO_PROCEDE · PENDIENTE_RECAUDOS
+                               └──────────── Devolver a la cola ──────────────────┤
+                                                                     Ausente ──────┴──► ABSENT
+ Cancelar (ciudadano / supervisor) ──► CANCELLED
 ```
-
-- **Orden de despacho:** `priority_level DESC, created_at ASC`. Las colas prioritarias pasan primero. Dentro de una misma prioridad, una cita presentada en el tótem conserva la antigüedad de su reserva, así que pasa antes que los presenciales que llegaron ese día.
-- **Numeración:** `prefijo + correlativo de 3 dígitos` (`A-001` … `A-999`, luego `A-1000`). Se reinicia sola cada día de negocio.
-- **Métricas:** `created_at`, `checked_in_at`, `called_at`, `started_at` y `finished_at` permiten calcular la espera (`called − llegada`) y la duración de la atención (`finished − started`), disponibles en `GET /api/admin/branches/:id/stats`.
 
 ### Seguridad
 
-- Contraseñas con **bcryptjs** (cost 12) y JWT con expiración. Los roles `ADMIN`, `SUPERVISOR` y `OPERATOR` se verifican en cada ruta.
-- Operadores y supervisores sólo acceden a **su sucursal**. ADMIN tiene alcance global.
-- **Zod** valida body, query, params y variables de entorno.
-- **Helmet** (CSP estricta, sin scripts inline) y rate‑limit en login y en la emisión pública.
-- Los eventos públicos de Socket.io **no incluyen el DNI ni el teléfono** del cliente. Ese dato sólo llega al operador por la API autenticada.
+- **Credenciales y roles:** bcrypt (cost 12), JWT y roles `ADMIN`, `SUPERVISOR`, `OPERATOR` verificados en cada ruta. Supervisores y funcionarios quedan limitados a su sede.
+- **Validación:** Zod valida body, query, params y entorno; los `CHECK` de PostgreSQL refuerzan las reglas de negocio.
+- **Cabeceras y límites:** Helmet con CSP estricta (sin scripts inline) y límite de pedidos en login, emisión y consulta de cédula.
+- **Datos personales:** la TV no recibe nombres y la cédula puede ir enmascarada. El CSV exportado está protegido contra inyección de fórmulas.
 
 ---
 
-## 7. Concurrencia: cómo funciona "Llamar siguiente"
+## 11. Concurrencia: cómo funciona "Llamar siguiente"
 
 Implementación: [`src/modules/operator/dispatcher.service.ts`](src/modules/operator/dispatcher.service.ts)
 
 ```sql
-BEGIN;  -- READ COMMITTED
-
--- 1) Serializa clics repetidos del MISMO box (doble clic, dos pestañas)
-SELECT id, branch_id, current_operator_id FROM desks WHERE id = $desk FOR UPDATE;
-
--- 2) Toma el próximo turno saltando los que otro box está tomando en este instante
-SELECT t.id
-FROM tickets t
-WHERE t.branch_id = $branch
-  AND t.status = 'WAITING'
-  AND t.service_date = $hoy
-  AND (t.type = 'WALK_IN' OR t.checked_in_at IS NOT NULL)
-  AND (<la cola es atendida por este box>)
-ORDER BY t.priority_level DESC, t.created_at ASC
-LIMIT 1
-FOR UPDATE SKIP LOCKED;
-
--- 3) Asigna
-UPDATE tickets SET status='CALLED', desk_id=$desk, operator_id=$op, called_at=now() WHERE id=$id;
-COMMIT;
-
--- 4) Recién después del COMMIT: emit 'ticket:called' + 'queue:updated'
+BEGIN;
+SELECT … FROM desks WHERE id = $taquilla FOR UPDATE;           -- serializa clics de la MISMA taquilla
+SELECT t.id FROM tickets t
+ WHERE t.branch_id = $sede AND t.status = 'WAITING' AND t.service_date = $hoy
+   AND (t.type = 'WALK_IN' OR t.checked_in_at IS NOT NULL)
+   AND (<el motivo es atendido por esta taquilla>)
+ ORDER BY t.priority_level DESC, t.created_at ASC
+ LIMIT 1
+ FOR UPDATE SKIP LOCKED;                                        -- las demás taquillas saltean esta fila
+UPDATE tickets SET status='CALLED', desk_id, desk_number, operator_id, operator_name, called_at, wait_seconds …;
+COMMIT;                                                         -- recién ahora: emit 'ticket:called'
 ```
 
-- `FOR UPDATE` bloquea la fila elegida hasta el `COMMIT`.
-- `SKIP LOCKED` hace que otra transacción simultánea **no espere ni lea la misma fila**: pasa al siguiente candidato. Así diez boxes pueden llamar en el mismo milisegundo y cada uno recibe un turno distinto, sin bloqueos en cadena.
-- El índice único parcial `uq_tickets_desk_active` es la red de seguridad en la base: un box no puede tener dos turnos `CALLED`/`IN_SERVICE` aunque hubiera un bug en la aplicación.
-- Las demás transiciones (iniciar, finalizar, ausente) usan **UPDATE condicional** (`WHERE status IN (…)`). Si dos acciones compiten, sólo una aplica y la otra recibe `409`.
-
-**Numeración atómica.** Un único `UPSERT` sobre `daily_counters`. La fila bloqueada garantiza números consecutivos sin duplicados aunque varios tótems emitan a la vez:
-
-```sql
-INSERT INTO daily_counters (category_id, service_date, last_number) VALUES ($cat, $hoy, 1)
-ON CONFLICT (category_id, service_date) DO UPDATE SET last_number = daily_counters.last_number + 1
-RETURNING last_number;
-```
-
-**Citas.** `pg_advisory_xact_lock(hashtext(categoría|fecha|hora))` serializa las reservas de una misma franja, así que no se puede superar la capacidad (cantidad de boxes que atienden esa cola).
+- `SKIP LOCKED` permite que N taquillas llamen en el mismo milisegundo sin recibir nunca el mismo ciudadano y sin bloquearse entre sí.
+- El índice único parcial `uq_tickets_desk_active` es la red de seguridad en la base de datos.
+- Las demás transiciones usan `UPDATE … WHERE status IN (…)`: si dos acciones compiten, una gana y la otra recibe `409`.
+- **Numeración atómica:** `INSERT … ON CONFLICT (branch_id, prefix, service_date) DO UPDATE SET last_number = last_number + 1 RETURNING`.
+- **Un turno activo por ciudadano:** `pg_advisory_xact_lock` por cédula evita duplicados ante dobles toques en el tótem.
+- **Citas:** un lock por motivo, fecha y hora impide superar la capacidad de la franja (la cantidad de taquillas que atienden ese motivo).
 
 ---
 
-## 8. Referencia de la API y de los eventos en tiempo real
+## 12. Referencia de la API y eventos en tiempo real
 
-### REST
-
-Rutas públicas (sin autenticación):
+### Rutas públicas (sin autenticación)
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/brand` · `/brand.css` | Configuración de marca y tokens CSS |
-| GET | `/api/public/branches` | Sucursales activas |
-| GET | `/api/public/branches/:code` | Sucursal y sus colas |
-| GET | `/api/public/branches/:id/queue` | Snapshot de la cola (TV) |
-| POST | `/api/public/tickets` | Sacar turno `{ branchId, categoryId, customerIdentifier? }` |
+| GET | `/api/brand` · `/brand.css` | Configuración institucional y tokens CSS |
+| GET | `/api/public/branches` · `/api/public/branches/:code` | Sedes y motivos activos |
+| GET | `/api/public/branches/:id/queue` | Snapshot de la cola, para la TV |
+| GET | `/api/public/citizens/lookup?idOrigin&idNumber` | Autocompletado del nombre: `{ found, fullName, source, masked }` |
+| POST | `/api/public/tickets` | `{ branchId, reasonId, idOrigin, idNumber, citizenName, preferentialType? }` |
 | GET | `/api/public/tickets/:id` | Estado, posición y espera estimada |
-| POST | `/api/public/tickets/:id/cancel` | El cliente cancela su turno |
-| GET | `/api/public/appointments/availability?branchId&categoryId&date` | Franjas libres |
-| POST | `/api/public/appointments` | Agendar `{ branchId, categoryId, customerIdentifier, date: 'YYYY-MM-DD', time: 'HH:mm' }` |
-| POST | `/api/public/appointments/check-in` | Registrar llegada `{ branchId, customerIdentifier }` |
+| POST | `/api/public/tickets/:id/cancel` | El ciudadano cancela su turno |
+| GET | `/api/public/appointments/availability?branchId&reasonId&date` | Franjas libres |
+| POST | `/api/public/appointments` | `{ branchId, reasonId, date, time, idOrigin, idNumber, citizenName, preferentialType? }` |
+| POST | `/api/public/appointments/check-in` | `{ branchId, idOrigin, idNumber }` |
 
-Autenticación:
+### Autenticación
 
 | Método | Ruta | Descripción |
 |---|---|---|
 | POST | `/api/auth/login` | `{ email, password }` → `{ token, user }` |
-| GET | `/api/auth/me` | Usuario actual y box ocupado |
+| GET | `/api/auth/me` | Usuario actual y taquilla ocupada |
 
-Operador (`Authorization: Bearer <token>`, cualquier rol):
+### Taquilla (`Authorization: Bearer <token>`)
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/operator/desks` | Boxes de la sucursal |
-| POST | `/api/operator/desks/:id/claim` · `/release` | Tomar o liberar un box |
-| GET | `/api/operator/desks/:id/state` | Turno en curso y atendidos hoy |
-| POST | `/api/operator/desks/:id/call-next` | ★ **Llamar siguiente**: `200` con el ticket, o `204` si no hay nadie esperando |
-| POST | `/api/operator/tickets/:id/start` · `/finish` · `/absent` · `/recall` · `/requeue` | Ciclo de vida del turno |
+| GET | `/api/operator/desks` | Taquillas de la sede |
+| GET | `/api/operator/departments` | Dependencias, para "Remitido a" |
+| POST | `/api/operator/desks/:id/claim` · `/release` | Tomar o liberar la taquilla |
+| GET | `/api/operator/desks/:id/state` | Atención en curso y atendidos hoy |
+| POST | `/api/operator/desks/:id/call-next` | ★ Llamar siguiente: `200` con el ticket, o `204` si no hay nadie |
+| POST | `/api/operator/tickets/:id/start` · `/absent` · `/recall` · `/requeue` | Ciclo de vida |
+| POST | `/api/operator/tickets/:id/finish` | ★ `{ resolutionStatus, resolutionNotes, destinationDepartment? }` |
 
-Administración y supervisión:
+### Administración y supervisión
 
 | Método | Ruta | Rol |
 |---|---|---|
-| GET/POST/PATCH | `/api/admin/branches` · `/categories` · `/desks` · `/users` | ADMIN (los GET de sucursales, colas y boxes también SUPERVISOR) |
-| GET | `/api/admin/branches/:id/tickets?status=&date=` | SUPERVISOR+ |
-| GET | `/api/admin/branches/:id/stats?date=` | SUPERVISOR+: espera media, atención media, por cola, por operador y por hora |
+| GET/POST/PATCH/DELETE | `/api/admin/reasons` | ADMIN, SUPERVISOR (su sede) |
+| GET/POST/PATCH | `/api/admin/branches` · `/desks` · `/users` | ADMIN (los GET de sedes y taquillas también SUPERVISOR) |
 | POST | `/api/admin/tickets/:id/cancel` | SUPERVISOR+ |
-| GET | `/health` | Healthcheck (incluye un ping a la base) |
+| GET | `/api/reports/*` | SUPERVISOR+ (ver [sección 9](#9-reportería)) |
+| GET | `/health` | Healthcheck |
 
 ### Socket.io
 
-Definidos en [`src/sockets/index.ts`](src/sockets/index.ts).
-
 | Dirección | Evento | Payload |
 |---|---|---|
-| cliente → servidor | `branch:join` | `{ branchId }` → ack `{ ok, snapshot }` |
-| cliente → servidor | `branch:leave` | `{ branchId }` |
-| cliente → servidor | `ticket:watch` | `{ ticketId }`: el celular del cliente sigue su turno |
-| servidor → cliente | **`ticket:called`** | `{ ticket, isRecall }`: la TV muestra el turno, suena y lo anuncia |
-| servidor → cliente | **`queue:updated`** | Snapshot: colas con espera, boxes abiertos, últimos llamados y totales (agrupado cada 150 ms) |
-| servidor → cliente | `ticket:updated` | `{ ticket }` en cada cambio de estado |
-
-Salas: `branch:<id>` (TV, operadores y tótems de la sucursal) y `ticket:<id>` (seguimiento individual). La autenticación del socket es opcional: si se envía `auth.token`, debe ser un JWT válido.
+| cliente → servidor | `branch:join` | `{ branchId }`, con ack `{ ok, snapshot }` |
+| cliente → servidor | `ticket:watch` | `{ ticketId }` (seguimiento desde el celular) |
+| servidor → cliente | **`ticket:called`** | `{ ticket, isRecall }`, donde `ticket` incluye `citizen.display` (cédula formateada o enmascarada), `desk.number` y `reason`. **Sin nombre.** |
+| servidor → cliente | **`queue:updated`** | Espera por motivo, preferenciales, taquillas abiertas, últimos llamados y totales |
+| servidor → cliente | `ticket:updated` | Cambio de estado de un turno |

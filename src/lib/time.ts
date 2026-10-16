@@ -22,3 +22,35 @@ export const daysBetween = (from: string, to: string) =>
 
 /** Formatea el código visible del turno: A-001, R-042… */
 export const formatTicketCode = (prefix: string, n: number) => `${prefix}-${String(n).padStart(3, '0')}`;
+
+const ISO_WEEKDAY: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+
+/**
+ * Desglose temporal para reportería (columnas year/month/day/hour/day_of_week).
+ * Se calcula en APP_TIMEZONE para que "las 9 de la mañana" sean las 9 locales.
+ */
+export function temporalParts(at: Date) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: env.APP_TIMEZONE,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      hourCycle: 'h23',
+      weekday: 'short',
+    })
+      .formatToParts(at)
+      .map((p) => [p.type, p.value]),
+  );
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    dayOfWeek: ISO_WEEKDAY[parts.weekday],
+  };
+}
+
+/** Segundos enteros entre dos instantes (nunca negativo). */
+export const secondsBetween = (from: Date, to: Date) => Math.max(0, Math.round((to.getTime() - from.getTime()) / 1000));

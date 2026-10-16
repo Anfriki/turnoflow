@@ -10,6 +10,7 @@ import { authRouter } from './modules/auth/auth.routes.js';
 import { publicRouter } from './modules/public/public.routes.js';
 import { operatorRouter } from './modules/operator/operator.routes.js';
 import { adminRouter } from './modules/admin/admin.routes.js';
+import { reportsRouter } from './modules/reports/reports.routes.js';
 
 export function createApp() {
   const app = express();
@@ -42,9 +43,13 @@ export function createApp() {
       locale: b.locale,
       timezone: env.APP_TIMEZONE,
       assets: b.assets,
+      citizen: b.citizen,
+      deskLabel: b.deskLabel,
       display: b.display,
       totem: b.totem,
+      attention: b.attention,
       appointments: b.appointments,
+      citizenLookupEnabled: env.CITIZEN_LOOKUP_PROVIDER !== 'none',
     });
   });
   app.get('/brand.css', (_req, res) => {
@@ -61,6 +66,7 @@ export function createApp() {
   app.use('/api/public', publicRouter);
   app.use('/api/operator', operatorRouter);
   app.use('/api/admin', adminRouter);
+  app.use('/api/reports', reportsRouter);
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Endpoint inexistente' });
   });

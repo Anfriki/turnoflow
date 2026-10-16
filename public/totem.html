@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tótem</title>
+  <title>Registro de turnos</title>
   <link rel="stylesheet" href="/brand.css" />
   <link rel="stylesheet" href="/css/app.css" />
 </head>
@@ -17,58 +17,71 @@
 
   <main class="container" id="app">
     <nav class="tabs" role="tablist" id="tabs" hidden>
-      <button role="tab" data-tab="walkin" aria-selected="true">Sacar turno</button>
+      <button role="tab" data-tab="walkin" aria-selected="true">Solicitar turno</button>
       <button role="tab" data-tab="checkin" aria-selected="false">Tengo cita</button>
       <button role="tab" data-tab="book" aria-selected="false">Agendar cita</button>
     </nav>
 
-    <!-- Turno presencial -->
+    <!-- Registro de entrada (turno presencial) -->
     <section data-panel="walkin" hidden>
-      <h1 style="margin-top:0">¿Qué trámite vas a realizar?</h1>
-      <div class="totem-grid" id="categories"></div>
+      <form id="walkin-form" class="two-col" novalidate>
+        <div class="card">
+          <h2 class="step"><span>1</span> Identificación</h2>
+          <div id="walkin-citizen"></div>
+        </div>
+        <div class="card">
+          <h2 class="step"><span>2</span> Motivo de atención</h2>
+          <div class="field">
+            <label for="walkin-reason">¿Qué trámite viene a realizar?</label>
+            <select id="walkin-reason" class="big-select" required></select>
+            <p class="muted reason-desc" id="walkin-reason-desc"></p>
+          </div>
+          <div class="field" id="walkin-pref-wrap">
+            <label>Atención preferencial</label>
+            <div class="seg wide" role="radiogroup" id="walkin-pref"></div>
+          </div>
+          <p class="error-msg" id="walkin-error" role="alert"></p>
+          <button class="btn xl" type="submit" style="width:100%">Obtener turno</button>
+        </div>
+      </form>
     </section>
 
     <!-- Check-in de cita -->
     <section data-panel="checkin" hidden>
-      <div class="card" style="max-width:520px">
+      <form id="checkin-form" class="card narrow" novalidate>
         <h2 style="margin-top:0">Registrar mi llegada</h2>
-        <p class="muted">Ingresá el mismo dato que usaste al agendar tu cita.</p>
-        <form id="checkin-form">
-          <div class="field">
-            <label for="checkin-id" class="id-label"></label>
-            <input id="checkin-id" name="customerIdentifier" required minlength="3" maxlength="80" autocomplete="off" />
-          </div>
-          <p class="error-msg" id="checkin-error"></p>
-          <button class="btn lg" type="submit">Confirmar llegada</button>
-        </form>
-      </div>
+        <p class="muted">Ingrese la cédula con la que agendó su cita.</p>
+        <div id="checkin-citizen"></div>
+        <p class="error-msg" id="checkin-error" role="alert"></p>
+        <button class="btn lg" type="submit" style="width:100%">Confirmar llegada</button>
+      </form>
     </section>
 
     <!-- Agendar cita web -->
     <section data-panel="book" hidden>
-      <div class="card" style="max-width:640px">
-        <h2 style="margin-top:0">Agendar cita previa</h2>
-        <form id="book-form">
-          <div class="field">
-            <label for="book-category">Trámite</label>
-            <select id="book-category" name="categoryId" required></select>
-          </div>
-          <div class="field">
-            <label for="book-date">Fecha</label>
-            <input id="book-date" name="date" type="date" required />
-          </div>
-          <div class="field">
-            <label>Horario</label>
-            <div class="slots" id="slots"><span class="muted">Elegí trámite y fecha.</span></div>
-          </div>
-          <div class="field">
-            <label for="book-id" class="id-label"></label>
-            <input id="book-id" name="customerIdentifier" required minlength="3" maxlength="80" autocomplete="off" />
-          </div>
-          <p class="error-msg" id="book-error"></p>
-          <button class="btn lg" type="submit" id="book-submit" disabled>Confirmar cita</button>
-        </form>
-      </div>
+      <form id="book-form" class="card narrow" novalidate>
+        <h2 style="margin-top:0">Agendar cita</h2>
+        <div id="book-citizen"></div>
+        <div class="field">
+          <label for="book-reason">Motivo de atención</label>
+          <select id="book-reason" required></select>
+          <p class="muted reason-desc" id="book-reason-desc"></p>
+        </div>
+        <div class="field">
+          <label for="book-date">Fecha</label>
+          <input id="book-date" type="date" required />
+        </div>
+        <div class="field">
+          <label>Horario</label>
+          <div class="slots" id="slots"><span class="muted">Elija motivo y fecha.</span></div>
+        </div>
+        <div class="field" id="book-pref-wrap">
+          <label>Atención preferencial</label>
+          <div class="seg wide" role="radiogroup" id="book-pref"></div>
+        </div>
+        <p class="error-msg" id="book-error" role="alert"></p>
+        <button class="btn lg" type="submit" id="book-submit" disabled style="width:100%">Confirmar cita</button>
+      </form>
     </section>
 
     <!-- Ticket emitido / seguimiento -->

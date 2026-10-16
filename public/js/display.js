@@ -1,9 +1,12 @@
 import { applyBrand } from './brand.js';
 import { api, connectSocket, escapeHtml, getBranchCode, renderBranchPicker } from './api.js';
+import { deskLabel } from './labels.js';
 import { announce, unlockAudio } from './sound.js';
 
 const $ = (sel) => document.querySelector(sel);
 const brand = await applyBrand('Pantalla de sala');
+/** Se llama por cédula salvo que la marca pida llamar por turno o la cédula vaya enmascarada sin número legible. */
+const byCedula = brand.display.callBy === 'cedula';
 
 const code = getBranchCode();
 if (!code) {
@@ -19,7 +22,6 @@ async function init(code) {
   $('#branch-name').textContent = branch.name;
   $('#ticker').textContent = brand.display.ticker;
 
-  // Reloj
   const tick = () =>
     ($('#clock').textContent = new Date().toLocaleTimeString(brand.locale, {
       timeZone: brand.timezone,
@@ -38,10 +40,14 @@ async function init(code) {
 
   let lastCalledId = null;
 
+  /** "Cédula V-12.345.678 · pase a · Taquilla N° 3" */
   const showNow = (t, animate) => {
-    $('#now-code').textContent = t.code;
-    $('#now-desk').textContent = t.desk ? t.desk.identifier : '';
-    $('#now-category').textContent = t.category.name;
+    $('#now-label').textContent = byCedula ? 'Cédula' : 'Turno';
+    $('#now-main').textContent = byCedula ? t.citizen.display : t.code;
+    $('#now-main').classList.toggle('cedula', byCedula);
+    $('#now-pass').textContent = 'pase a';
+    $('#now-desk').textContent = t.desk ? deskLabel(brand, t.desk.number) : '';
+    $('#now-sub').textContent = byCedula ? `Turno ${t.code} · ${t.reason.name}` : t.reason.name;
     if (animate) {
       const now = $('#now');
       now.classList.remove('flash');
@@ -58,12 +64,16 @@ async function init(code) {
     }
     $('#history').innerHTML = (latest ? rest : [])
       .map(
-        (t) => `<div class="history-row status-${t.status}"><span>${escapeHtml(t.code)}</span><span class="desk">${escapeHtml(t.desk?.identifier ?? '')}</span></div>`,
+        (t) => `<div class="history-row status-${t.status}">
+          <span>${escapeHtml(byCedula ? t.citizen.display : t.code)}</span>
+          <span class="desk">${escapeHtml(t.desk ? deskLabel(brand, t.desk.number) : '')}</span></div>`,
       )
       .join('');
-    $('#waiting').innerHTML = s.categories
-      .map((c) => `<span class="chip">${escapeHtml(c.name)} <b>${c.waiting}</b></span>`)
-      .join('');
+    const chips = s.reasons.filter((r) => r.waiting > 0);
+    $('#waiting').innerHTML =
+      `<span class="chip">En espera <b>${s.totals.waiting}</b></span>` +
+      (s.totals.waitingPreferential ? `<span class="chip pref">Preferencial <b>${s.totals.waitingPreferential}</b></span>` : '') +
+      chips.map((r) => `<span class="chip">${escapeHtml(r.name)} <b>${r.waiting}</b></span>`).join('');
   };
 
   renderSnapshot(await api(`/api/public/branches/${branch.id}/queue`));

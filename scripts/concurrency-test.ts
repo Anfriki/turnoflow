@@ -1,10 +1,10 @@
 /**
  * Prueba de concurrencia de "Llamar siguiente" contra un servidor en marcha.
  *
- *  1. Tres operadores toman Box 1, Box 2 y Box 5 (todos atienden la cola "A").
- *  2. Se emiten N turnos de Cajas en paralelo (prueba del correlativo atómico).
- *  3. Los tres boxes llaman y finalizan turnos en paralelo, a máxima velocidad.
- *  4. Se verifica: ningún ticket llamado dos veces y códigos sin duplicados.
+ *  1. Tres funcionarios toman las Taquillas 01, 02 y 07 (todas atienden "Reclamo de Nómina").
+ *  2. Se emiten N turnos de NOM-01 en paralelo, con cédulas distintas (prueba del correlativo atómico).
+ *  3. Las tres taquillas llaman y finalizan turnos en paralelo, a máxima velocidad.
+ *  4. Se verifica: ningún turno llamado dos veces y códigos sin duplicados.
  *
  *   npm run dev            (en otra terminal, con el seed cargado)
  *   npm run test:concurrency
@@ -22,41 +22,52 @@ async function api<T>(method: string, path: string, body?: unknown, token?: stri
   return { status: res.status, data: (text ? JSON.parse(text) : null) as T };
 }
 
-async function main() {
-  const branch = (await api<{ id: string; categories: { id: string; prefixLetter: string }[] }>('GET', '/api/public/branches/CENTRAL')).data;
-  const cajas = branch.categories.find((c) => c.prefixLetter === 'A')!;
+const RESOLUTION = { resolutionStatus: 'RESUELTO', resolutionNotes: 'Prueba automatizada de concurrencia' };
 
-  const ops = ['operador1', 'operador2', 'operador3'];
-  const deskNames = ['Box 1', 'Box 2', 'Box 5'];
+async function main() {
+  const branch = (await api<{ id: string; reasons: { id: string; code: string }[] }>('GET', '/api/public/branches/SEDE')).data;
+  const nomina = branch.reasons.find((r) => r.code === 'NOM-01')!;
+
+  const ops = ['taquilla1', 'taquilla2', 'taquilla3'];
+  const deskNumbers = [1, 2, 7];
   const sessions = await Promise.all(
     ops.map(async (op, i) => {
-      const { data } = await api<{ token: string }>('POST', '/api/auth/login', { email: `${op}@turnos.local`, password: 'Operador123!' });
-      const desks = (await api<{ id: string; identifier: string }[]>('GET', '/api/operator/desks', undefined, data.token)).data;
-      const desk = desks.find((d) => d.identifier === deskNames[i])!;
+      const { data } = await api<{ token: string }>('POST', '/api/auth/login', { email: `${op}@ministerio.local`, password: 'Taquilla123!' });
+      const desks = (await api<{ id: string; number: number }[]>('GET', '/api/operator/desks', undefined, data.token)).data;
+      const desk = desks.find((d) => d.number === deskNumbers[i])!;
       const claim = await api('POST', `/api/operator/desks/${desk.id}/claim`, {}, data.token);
-      if (claim.status !== 200) throw new Error(`${op} no pudo tomar ${desk.identifier}: ${JSON.stringify(claim.data)}`);
+      if (claim.status !== 200) throw new Error(`${op} no pudo tomar la taquilla ${desk.number}: ${JSON.stringify(claim.data)}`);
       return { op, token: data.token, deskId: desk.id };
     }),
   );
-  console.log(`✔ ${sessions.length} operadores en sus boxes`);
+  console.log(`✔ ${sessions.length} funcionarios en sus taquillas`);
 
   // Vaciar la cola previa para que la prueba sea determinista
   for (const s of sessions) {
     for (;;) {
       const r = await api<{ id: string }>('POST', `/api/operator/desks/${s.deskId}/call-next`, {}, s.token);
       if (r.status !== 200) break;
-      await api('POST', `/api/operator/tickets/${r.data.id}/finish`, {}, s.token);
+      await api('POST', `/api/operator/tickets/${r.data.id}/finish`, RESOLUTION, s.token);
     }
   }
 
+  const base = 30_000_000 + Math.floor(Math.random() * 1_000_000) * 100;
   const issued = await Promise.all(
-    Array.from({ length: N }, () =>
-      api<{ id: string; code: string }>('POST', '/api/public/tickets', { branchId: branch.id, categoryId: cajas.id }),
+    Array.from({ length: N }, (_, i) =>
+      api<{ id: string; code: string; message?: string }>('POST', '/api/public/tickets', {
+        branchId: branch.id,
+        reasonId: nomina.id,
+        idOrigin: 'V',
+        idNumber: String(base + i),
+        citizenName: `Ciudadano Prueba ${i + 1}`,
+      }),
     ),
   );
-  const codes = issued.map((r) => r.data.code);
+  const failed = issued.filter((r) => r.status !== 201);
+  if (failed.length) throw new Error(`❌ ${failed.length} emisiones fallaron: ${failed[0].data.message}`);
+  const codes = issued.map((r) => r.data.code).sort();
   if (new Set(codes).size !== N) throw new Error('❌ Códigos duplicados en la emisión concurrente');
-  console.log(`✔ ${N} turnos emitidos en paralelo, todos con código único (${codes.sort()[0]} … ${codes.sort().at(-1)})`);
+  console.log(`✔ ${N} turnos emitidos en paralelo, todos con código único (${codes[0]} … ${codes.at(-1)})`);
 
   const calledBy = new Map<string, string>();
   const dupes: string[] = [];
@@ -68,16 +79,16 @@ async function main() {
         if (r.status !== 200) throw new Error(`${s.op}: ${r.status} ${JSON.stringify(r.data)}`);
         if (calledBy.has(r.data.id)) dupes.push(`${r.data.code} (${calledBy.get(r.data.id)} y ${s.op})`);
         calledBy.set(r.data.id, s.op);
-        await api('POST', `/api/operator/tickets/${r.data.id}/finish`, {}, s.token);
+        await api('POST', `/api/operator/tickets/${r.data.id}/finish`, RESOLUTION, s.token);
       }
     }),
   );
 
   const perOp = Object.fromEntries(ops.map((op) => [op, [...calledBy.values()].filter((v) => v === op).length]));
   console.log('  Reparto:', perOp);
-  if (dupes.length) throw new Error(`❌ Tickets llamados dos veces: ${dupes.join(', ')}`);
+  if (dupes.length) throw new Error(`❌ Turnos llamados dos veces: ${dupes.join(', ')}`);
   if (calledBy.size !== N) throw new Error(`❌ Se llamaron ${calledBy.size} de ${N} turnos`);
-  console.log(`✔ ${N} turnos despachados entre 3 boxes concurrentes sin duplicados`);
+  console.log(`✔ ${N} turnos despachados entre 3 taquillas concurrentes sin duplicados`);
 }
 
 main().catch((e) => {

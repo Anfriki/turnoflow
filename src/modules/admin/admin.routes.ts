@@ -2,18 +2,16 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { prisma } from '../../db/prisma.js';
-import { env } from '../../config/env.js';
-import { conflict } from '../../lib/errors.js';
-import { businessDate, toDbDate } from '../../lib/time.js';
+import { conflict, notFound } from '../../lib/errors.js';
 import { assertBranchAccess, requireAuth, requireRole, type AuthUser } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
 import { realtime } from '../../sockets/index.js';
 import { ticketInclude, toPublicTicket, toStaffTicket } from '../tickets/ticket.dto.js';
 
 /**
- * Administración y supervisión.
- *  - ADMIN: gestiona sucursales, colas, boxes y usuarios.
- *  - SUPERVISOR: consulta métricas y gestiona turnos de su sucursal.
+ * Administración.
+ *  - ADMIN: gestiona sedes, taquillas, usuarios y motivos de todas las sedes.
+ *  - SUPERVISOR: gestiona los motivos de atención y los turnos de SU sede.
  */
 export const adminRouter = Router();
 adminRouter.use(requireAuth);
@@ -24,7 +22,7 @@ const idParam = validate({ params: z.object({ id: uuid }) });
 const onlyAdmin = requireRole('ADMIN');
 const supervisors = requireRole('ADMIN', 'SUPERVISOR');
 
-// ── Sucursales ──
+// ── Sedes ──
 const BranchBody = z.object({
   name: z.string().trim().min(2).max(120),
   code: z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{2,20}$/),
@@ -42,46 +40,102 @@ adminRouter.patch('/branches/:id', onlyAdmin, idParam, validate({ body: BranchBo
   res.json(await prisma.branch.update({ where: { id: res.locals.params.id }, data: res.locals.body }));
 });
 
-// ── Colas / trámites ──
-const CategoryBody = z.object({
+// ── Motivos de atención (tabla maestra) ──
+const ReasonBody = z.object({
   branchId: uuid,
-  name: z.string().trim().min(2).max(80),
-  prefixLetter: z.string().trim().toUpperCase().regex(/^[A-Z]{1,3}$/),
+  code: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z0-9][A-Z0-9_-]{1,19}$/, 'Código: letras, números y guiones (ej. NOM-01)'),
+  name: z.string().trim().min(3).max(120),
+  description: z.string().trim().max(1000).optional().nullable(),
+  department: z.string().trim().min(3, 'Indique la Dirección o unidad responsable').max(150),
+  prefixLetter: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z]{1,3}$/, 'Prefijo: 1 a 3 letras (ej. N, JUB)'),
   priorityLevel: z.number().int().min(0).max(100).default(0),
   estimatedDurationMin: z.number().int().min(1).max(480).default(10),
   allowAppointments: z.boolean().default(true),
-  isActive: z.boolean().optional(),
+  isActive: z.boolean().default(true),
 });
+
+async function loadReasonFor(user: AuthUser, id: string) {
+  const reason = await prisma.attentionReason.findUnique({ where: { id } });
+  if (!reason) throw notFound('Motivo no encontrado');
+  assertBranchAccess(user, reason.branchId);
+  return reason;
+}
 
 adminRouter.get(
-  '/categories',
+  '/reasons',
   supervisors,
-  validate({ query: z.object({ branchId: uuid }) }),
+  validate({
+    query: z.object({
+      branchId: uuid,
+      includeInactive: z.enum(['true', 'false']).default('true'),
+    }),
+  }),
   async (_req, res) => {
-    assertBranchAccess(me(res), res.locals.query.branchId);
-    res.json(await prisma.serviceCategory.findMany({ where: { branchId: res.locals.query.branchId }, orderBy: { prefixLetter: 'asc' } }));
-  },
-);
-adminRouter.post('/categories', onlyAdmin, validate({ body: CategoryBody }), async (_req, res) => {
-  res.status(201).json(await prisma.serviceCategory.create({ data: res.locals.body }));
-});
-adminRouter.patch(
-  '/categories/:id',
-  onlyAdmin,
-  idParam,
-  validate({ body: CategoryBody.omit({ branchId: true }).partial() }),
-  async (_req, res) => {
-    res.json(await prisma.serviceCategory.update({ where: { id: res.locals.params.id }, data: res.locals.body }));
+    const { branchId, includeInactive } = res.locals.query;
+    assertBranchAccess(me(res), branchId);
+    const reasons = await prisma.attentionReason.findMany({
+      where: { branchId, ...(includeInactive === 'false' ? { isActive: true } : {}) },
+      orderBy: [{ department: 'asc' }, { code: 'asc' }],
+      include: { _count: { select: { tickets: true } } },
+    });
+    res.json(reasons.map(({ _count, ...r }) => ({ ...r, ticketCount: _count.tickets })));
   },
 );
 
-// ── Boxes ──
+adminRouter.post('/reasons', supervisors, validate({ body: ReasonBody }), async (_req, res) => {
+  assertBranchAccess(me(res), res.locals.body.branchId);
+  const reason = await prisma.attentionReason.create({ data: res.locals.body });
+  realtime.queueUpdated(reason.branchId);
+  res.status(201).json(reason);
+});
+
+adminRouter.patch(
+  '/reasons/:id',
+  supervisors,
+  idParam,
+  validate({ body: ReasonBody.omit({ branchId: true }).partial() }),
+  async (_req, res) => {
+    await loadReasonFor(me(res), res.locals.params.id);
+    const reason = await prisma.attentionReason.update({ where: { id: res.locals.params.id }, data: res.locals.body });
+    realtime.queueUpdated(reason.branchId);
+    res.json(reason);
+  },
+);
+
+/** Sólo se eliminan motivos sin atenciones registradas; los demás se desactivan (se preserva el histórico). */
+adminRouter.delete('/reasons/:id', supervisors, idParam, async (_req, res) => {
+  const reason = await loadReasonFor(me(res), res.locals.params.id);
+  const used = await prisma.ticket.count({ where: { reasonId: reason.id } });
+  if (used > 0) {
+    throw conflict(`El motivo tiene ${used} atenciones registradas. Desactívelo en lugar de eliminarlo.`, 'REASON_IN_USE');
+  }
+  await prisma.attentionReason.delete({ where: { id: reason.id } });
+  realtime.queueUpdated(reason.branchId);
+  res.status(204).end();
+});
+
+/** Direcciones / unidades ya cargadas (para autocompletar). */
+adminRouter.get('/departments', supervisors, async (_req, res) => {
+  const rows = await prisma.attentionReason.findMany({ distinct: ['department'], select: { department: true }, orderBy: { department: 'asc' } });
+  res.json(rows.map((r) => r.department));
+});
+
+// ── Taquillas ──
 const DeskBody = z.object({
   branchId: uuid,
+  number: z.number().int().min(1).max(999),
   identifier: z.string().trim().min(1).max(40),
   isActive: z.boolean().optional(),
-  /** Colas que atiende. Vacío = todas. */
-  categoryIds: z.array(uuid).default([]),
+  /** Motivos que atiende. Vacío = todos. */
+  reasonIds: z.array(uuid).default([]),
 });
 
 adminRouter.get('/desks', supervisors, validate({ query: z.object({ branchId: uuid }) }), async (_req, res) => {
@@ -89,17 +143,17 @@ adminRouter.get('/desks', supervisors, validate({ query: z.object({ branchId: uu
   res.json(
     await prisma.desk.findMany({
       where: { branchId: res.locals.query.branchId },
-      include: { categories: true, currentOperator: { select: { id: true, name: true } } },
-      orderBy: { identifier: 'asc' },
+      include: { reasons: true, currentOperator: { select: { id: true, name: true } } },
+      orderBy: { number: 'asc' },
     }),
   );
 });
 adminRouter.post('/desks', onlyAdmin, validate({ body: DeskBody }), async (_req, res) => {
-  const { categoryIds, ...data } = res.locals.body;
+  const { reasonIds, ...data } = res.locals.body;
   res.status(201).json(
     await prisma.desk.create({
-      data: { ...data, categories: { create: categoryIds.map((categoryId: string) => ({ categoryId })) } },
-      include: { categories: true },
+      data: { ...data, reasons: { create: reasonIds.map((reasonId: string) => ({ reasonId })) } },
+      include: { reasons: true },
     }),
   );
 });
@@ -109,21 +163,21 @@ adminRouter.patch(
   idParam,
   validate({ body: DeskBody.omit({ branchId: true }).partial() }),
   async (_req, res) => {
-    const { categoryIds, ...data } = res.locals.body;
+    const { reasonIds, ...data } = res.locals.body;
     const id = res.locals.params.id;
     const desk = await prisma.$transaction(async (tx) => {
-      if (categoryIds) {
-        await tx.deskCategory.deleteMany({ where: { deskId: id } });
-        await tx.deskCategory.createMany({ data: categoryIds.map((categoryId: string) => ({ deskId: id, categoryId })) });
+      if (reasonIds) {
+        await tx.deskReason.deleteMany({ where: { deskId: id } });
+        await tx.deskReason.createMany({ data: reasonIds.map((reasonId: string) => ({ deskId: id, reasonId })) });
       }
-      return tx.desk.update({ where: { id }, data, include: { categories: true } });
+      return tx.desk.update({ where: { id }, data, include: { reasons: true } });
     });
     realtime.queueUpdated(desk.branchId);
     res.json(desk);
   },
 );
 
-// ── Usuarios ──
+// ── Usuarios / funcionarios ──
 const UserBody = z.object({
   name: z.string().trim().min(2).max(120),
   email: z.string().trim().toLowerCase().email(),
@@ -139,7 +193,7 @@ adminRouter.get('/users', onlyAdmin, async (_req, res) => {
 });
 adminRouter.post('/users', onlyAdmin, validate({ body: UserBody }), async (_req, res) => {
   const { password, ...data } = res.locals.body;
-  if (data.role !== 'ADMIN' && !data.branchId) throw conflict('Operadores y supervisores deben pertenecer a una sucursal');
+  if (data.role !== 'ADMIN' && !data.branchId) throw conflict('Operadores y supervisores deben pertenecer a una sede');
   res.status(201).json(
     await prisma.user.create({ data: { ...data, passwordHash: await bcrypt.hash(password, 12) }, select: publicUser }),
   );
@@ -155,34 +209,7 @@ adminRouter.patch('/users/:id', onlyAdmin, idParam, validate({ body: UserBody.pa
   );
 });
 
-// ── Supervisión ──
-
-/** Turnos del día de una sucursal (filtro opcional por estado). */
-adminRouter.get(
-  '/branches/:id/tickets',
-  supervisors,
-  idParam,
-  validate({
-    query: z.object({
-      status: z.enum(['WAITING', 'CALLED', 'IN_SERVICE', 'ATTENDED', 'ABSENT', 'CANCELLED']).optional(),
-      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    }),
-  }),
-  async (_req, res) => {
-    const branchId = res.locals.params.id;
-    assertBranchAccess(me(res), branchId);
-    const tickets = await prisma.ticket.findMany({
-      where: {
-        branchId,
-        serviceDate: toDbDate(res.locals.query.date ?? businessDate()),
-        ...(res.locals.query.status ? { status: res.locals.query.status } : {}),
-      },
-      orderBy: [{ priorityLevel: 'desc' }, { createdAt: 'asc' }],
-      include: ticketInclude,
-    });
-    res.json(tickets.map(toStaffTicket));
-  },
-);
+// ── Supervisión de turnos ──
 
 /** Supervisor anula un turno en espera o llamado. */
 adminRouter.post('/tickets/:id/cancel', supervisors, idParam, async (_req, res) => {
@@ -198,49 +225,3 @@ adminRouter.post('/tickets/:id/cancel', supervisors, idParam, async (_req, res) 
   realtime.queueUpdated(ticket.branchId);
   res.json(toStaffTicket(ticket));
 });
-
-/** Métricas del día: tiempos medios de espera y atención, por cola y por operador. */
-adminRouter.get(
-  '/branches/:id/stats',
-  supervisors,
-  idParam,
-  validate({ query: z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }) }),
-  async (_req, res) => {
-    const branchId = res.locals.params.id;
-    assertBranchAccess(me(res), branchId);
-    const date = res.locals.query.date ?? businessDate();
-
-    const byCategory = await prisma.$queryRaw<unknown[]>`
-      SELECT c.name, c.prefix_letter AS prefix,
-             count(*)::int AS total,
-             count(*) FILTER (WHERE t.status = 'ATTENDED')::int AS attended,
-             count(*) FILTER (WHERE t.status = 'ABSENT')::int AS absent,
-             count(*) FILTER (WHERE t.status = 'WAITING')::int AS waiting,
-             round(avg(extract(epoch FROM t.called_at - coalesce(t.checked_in_at, t.created_at))) / 60, 1)::float AS avg_wait_min,
-             round(avg(extract(epoch FROM t.finished_at - t.started_at)) FILTER (WHERE t.status = 'ATTENDED') / 60, 1)::float AS avg_service_min
-      FROM tickets t
-      JOIN service_categories c ON c.id = t.category_id
-      WHERE t.branch_id = ${branchId}::uuid AND t.service_date = ${date}::date
-      GROUP BY c.name, c.prefix_letter
-      ORDER BY c.prefix_letter`;
-
-    const byOperator = await prisma.$queryRaw<unknown[]>`
-      SELECT u.name,
-             count(*) FILTER (WHERE t.status = 'ATTENDED')::int AS attended,
-             count(*) FILTER (WHERE t.status = 'ABSENT')::int AS absent,
-             round(avg(extract(epoch FROM t.finished_at - t.started_at)) FILTER (WHERE t.status = 'ATTENDED') / 60, 1)::float AS avg_service_min
-      FROM tickets t
-      JOIN users u ON u.id = t.operator_id
-      WHERE t.branch_id = ${branchId}::uuid AND t.service_date = ${date}::date
-      GROUP BY u.name
-      ORDER BY attended DESC`;
-
-    const hourly = await prisma.$queryRaw<unknown[]>`
-      SELECT extract(hour FROM t.created_at AT TIME ZONE ${env.APP_TIMEZONE})::int AS hour, count(*)::int AS issued
-      FROM tickets t
-      WHERE t.branch_id = ${branchId}::uuid AND t.service_date = ${date}::date
-      GROUP BY 1 ORDER BY 1`;
-
-    res.json({ date, byCategory, byOperator, hourly });
-  },
-);

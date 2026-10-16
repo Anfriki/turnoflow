@@ -80,12 +80,17 @@ export function announce(ticket, brand) {
   chain = chain.then(async () => {
     await playChime();
     if (brand.display.voiceEnabled) {
-      const text = brand.display.voiceTemplate
+      // Por cédula sólo si el número viaja legible (no enmascarado); si no, por N° de turno.
+      const byCedula = brand.display.callBy === 'cedula' && ticket.citizen?.spoken;
+      const template = byCedula ? brand.display.voiceTemplateCedula : brand.display.voiceTemplateTicket;
+      const text = template
+        .replace('{cedula}', ticket.citizen?.spoken ?? '')
         .replace('{code}', speakableCode(ticket.code))
+        .replace('{deskNumber}', String(ticket.desk?.number ?? ''))
         .replace('{desk}', ticket.desk?.identifier ?? '')
-        .replace('{category}', ticket.category?.name ?? '');
+        .replace('{reason}', ticket.reason?.name ?? '');
       speak(text, brand.display.voiceLang);
-      await new Promise((r) => setTimeout(r, 3500));
+      await new Promise((r) => setTimeout(r, 4500));
     }
   });
   return chain;

@@ -35,7 +35,8 @@ services:
       PORT: 3000
       DATABASE_URL: postgresql://turnos:turnos@db:5432/turnos_db?schema=public
       JWT_SECRET: ${JWT_SECRET:-cambia-esto-por-un-secreto-largo-y-aleatorio-de-32+caracteres}
-      APP_TIMEZONE: ${APP_TIMEZONE:-America/Argentina/Buenos_Aires}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Caracas}
+      CITIZEN_LOOKUP_PROVIDER: ${CITIZEN_LOOKUP_PROVIDER:-mock}
     ports:
       - "3000:3000"
     volumes:

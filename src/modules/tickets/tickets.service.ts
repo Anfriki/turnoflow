@@ -1,49 +1,64 @@
-import { Prisma } from '@prisma/client';
+import type { IdOrigin, PreferentialType, Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { env } from '../../config/env.js';
 import { getBrand } from '../../config/brand.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
-import { businessDate, daysBetween, formatTicketCode, toDbDate, weekday } from '../../lib/time.js';
+import { formatCedula } from '../../lib/cedula.js';
+import { businessDate, daysBetween, formatTicketCode, temporalParts, toDbDate, weekday } from '../../lib/time.js';
 import { realtime } from '../../sockets/index.js';
-import { DISPATCHABLE_WHERE } from './queue.service.js';
+import { citizenLookupService } from '../citizens/citizen-lookup.service.js';
+import { DISPATCHABLE_WHERE, servesReason } from './queue.service.js';
 import { ticketInclude, toPublicTicket, type TicketWithRelations } from './ticket.dto.js';
 
 type Tx = Prisma.TransactionClient;
 
+export interface CitizenInput {
+  idOrigin: IdOrigin;
+  idNumber: string;
+  citizenName: string;
+}
+
 /**
- * Generación ATÓMICA del correlativo diario.
+ * Generación ATÓMICA del correlativo diario por (sede, prefijo, día).
  *
- * Un único UPSERT sobre daily_counters (PK = categoría + día): PostgreSQL toma
- * un lock de fila, por lo que dos tótems emitiendo a la vez obtienen números
- * distintos sin huecos ni duplicados. Al cambiar el día de negocio se crea una
- * fila nueva → la numeración "se reinicia" sola en 001.
+ * Un único UPSERT: PostgreSQL bloquea la fila del contador, por lo que dos
+ * tótems emitiendo a la vez obtienen números distintos sin huecos ni
+ * duplicados. Al cambiar el día se crea una fila nueva → reinicia en 001.
+ * Los motivos que comparten prefijo comparten numeración (N-001, N-002…).
  */
-async function nextTicketNumber(tx: Tx, categoryId: string, serviceDate: string): Promise<number> {
+async function nextTicketNumber(tx: Tx, branchId: string, prefix: string, serviceDate: string): Promise<number> {
   const [row] = await tx.$queryRaw<{ last_number: number }[]>`
-    INSERT INTO daily_counters (category_id, service_date, last_number)
-    VALUES (${categoryId}::uuid, ${serviceDate}::date, 1)
-    ON CONFLICT (category_id, service_date)
+    INSERT INTO daily_counters (branch_id, prefix, service_date, last_number)
+    VALUES (${branchId}::uuid, ${prefix}, ${serviceDate}::date, 1)
+    ON CONFLICT (branch_id, prefix, service_date)
     DO UPDATE SET last_number = daily_counters.last_number + 1
     RETURNING last_number`;
   return row.last_number;
 }
 
-async function getActiveCategory(tx: Tx, branchId: string, categoryId: string) {
-  const category = await tx.serviceCategory.findFirst({
-    where: { id: categoryId, branchId, isActive: true, branch: { isActive: true } },
+async function getActiveReason(tx: Tx | typeof prisma, branchId: string, reasonId: string) {
+  const reason = await tx.attentionReason.findFirst({
+    where: { id: reasonId, branchId, isActive: true, branch: { isActive: true } },
   });
-  if (!category) throw notFound('Trámite no disponible en esta sucursal');
-  return category;
+  if (!reason) throw notFound('Motivo de atención no disponible en esta sede');
+  return reason;
 }
 
-/** Posición del turno dentro de su cola (cuántos despachables tiene delante). */
+/** Serializa operaciones del MISMO ciudadano (doble toque en el tótem) dentro de la transacción. */
+const lockCitizen = (tx: Tx, c: Pick<CitizenInput, 'idOrigin' | 'idNumber'>) =>
+  tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`citizen|${c.idOrigin}|${c.idNumber}`}))`;
+
+const priorityFor = (reasonPriority: number, preferential?: PreferentialType | null) =>
+  reasonPriority + (preferential ? getBrand().attention.preferentialBoost : 0);
+
+/** Posición del turno dentro de su motivo (cuántos despachables tiene delante). */
 export async function queuePosition(t: TicketWithRelations): Promise<number | null> {
   if (t.status !== 'WAITING') return null;
   if (t.type === 'SCHEDULED' && !t.checkedInAt) return null;
   const ahead = await prisma.ticket.count({
     where: {
       branchId: t.branchId,
-      categoryId: t.categoryId,
+      reasonId: t.reasonId,
       serviceDate: t.serviceDate,
       status: 'WAITING',
       ...DISPATCHABLE_WHERE,
@@ -62,47 +77,68 @@ export async function queuePosition(t: TicketWithRelations): Promise<number | nu
 
 async function withPosition(t: TicketWithRelations) {
   const position = await queuePosition(t);
-  const est = await prisma.serviceCategory.findUnique({
-    where: { id: t.categoryId },
-    select: { estimatedDurationMin: true },
-  });
-  const openDesks = await prisma.desk.count({
-    where: {
-      branchId: t.branchId,
-      isActive: true,
-      currentOperatorId: { not: null },
-      OR: [{ categories: { none: {} } }, { categories: { some: { categoryId: t.categoryId } } }],
-    },
-  });
+  const [reason, openDesks] = await Promise.all([
+    prisma.attentionReason.findUnique({ where: { id: t.reasonId }, select: { estimatedDurationMin: true } }),
+    prisma.desk.count({
+      where: { branchId: t.branchId, isActive: true, currentOperatorId: { not: null }, ...servesReason(t.reasonId) },
+    }),
+  ]);
   return {
     ...toPublicTicket(t),
     position,
     estimatedWaitMin:
-      position && est ? Math.ceil(((position - 1) * est.estimatedDurationMin) / Math.max(1, openDesks)) : null,
+      position && reason ? Math.ceil(((position - 1) * reason.estimatedDurationMin) / Math.max(1, openDesks)) : null,
   };
 }
 
 // ── Turnos presenciales (tótem) ────────────────────────────────
 
-export async function issueWalkInTicket(input: {
-  branchId: string;
-  categoryId: string;
-  customerIdentifier?: string;
-}) {
+export async function issueWalkInTicket(
+  input: CitizenInput & { branchId: string; reasonId: string; preferentialType?: PreferentialType | null },
+) {
   const day = businessDate();
+  const now = new Date();
+
   const ticket = await prisma.$transaction(async (tx) => {
-    const category = await getActiveCategory(tx, input.branchId, input.categoryId);
-    const n = await nextTicketNumber(tx, category.id, day);
+    const reason = await getActiveReason(tx, input.branchId, input.reasonId);
+    await lockCitizen(tx, input);
+
+    // Un ciudadano no puede tener dos turnos activos el mismo día en la misma sede
+    const active = await tx.ticket.findFirst({
+      where: {
+        branchId: input.branchId,
+        serviceDate: toDbDate(day),
+        idOrigin: input.idOrigin,
+        idNumber: input.idNumber,
+        status: { in: ['WAITING', 'CALLED', 'IN_SERVICE'] },
+      },
+      include: { reason: { select: { name: true } } },
+    });
+    if (active?.type === 'SCHEDULED' && !active.checkedInAt) {
+      throw conflict(`Tiene una cita hoy (${active.code}). Use la opción "Tengo cita" para registrar su llegada.`, 'HAS_APPOINTMENT');
+    }
+    if (active) {
+      throw conflict(`La cédula ${formatCedula(input.idOrigin, input.idNumber)} ya tiene el turno ${active.code} (${active.reason.name}) en curso.`, 'ALREADY_IN_QUEUE');
+    }
+
+    const n = await nextTicketNumber(tx, input.branchId, reason.prefixLetter, day);
+    await citizenLookupService.remember(input.idOrigin, input.idNumber, input.citizenName, tx);
+
     return tx.ticket.create({
       data: {
         branchId: input.branchId,
-        categoryId: category.id,
+        reasonId: reason.id,
         ticketNumber: n,
-        code: formatTicketCode(category.prefixLetter, n),
-        customerIdentifier: input.customerIdentifier || null,
+        code: formatTicketCode(reason.prefixLetter, n),
         type: 'WALK_IN',
-        priorityLevel: category.priorityLevel,
+        idOrigin: input.idOrigin,
+        idNumber: input.idNumber,
+        citizenName: input.citizenName,
+        preferentialType: input.preferentialType ?? null,
+        priorityLevel: priorityFor(reason.priorityLevel, input.preferentialType),
         serviceDate: toDbDate(day),
+        createdAt: now,
+        ...temporalParts(now),
       },
       include: ticketInclude,
     });
@@ -118,7 +154,7 @@ export async function getTicketStatus(ticketId: string) {
   return withPosition(ticket);
 }
 
-/** El cliente cancela su turno (sólo mientras está en espera). */
+/** El ciudadano cancela su turno (sólo mientras está en espera). */
 export async function cancelTicket(ticketId: string) {
   const res = await prisma.ticket.updateMany({
     where: { id: ticketId, status: 'WAITING' },
@@ -133,15 +169,9 @@ export async function cancelTicket(ticketId: string) {
 
 // ── Citas previas (web) ────────────────────────────────────────
 
-/** Cantidad de boxes que atienden la categoría (= citas simultáneas por franja). */
-async function slotCapacity(tx: Tx | typeof prisma, branchId: string, categoryId: string) {
-  const desks = await tx.desk.count({
-    where: {
-      branchId,
-      isActive: true,
-      OR: [{ categories: { none: {} } }, { categories: { some: { categoryId } } }],
-    },
-  });
+/** Cantidad de taquillas que atienden el motivo (= citas simultáneas por franja). */
+async function slotCapacity(tx: Tx | typeof prisma, branchId: string, reasonId: string) {
+  const desks = await tx.desk.count({ where: { branchId, isActive: true, ...servesReason(reasonId) } });
   return Math.max(1, desks);
 }
 
@@ -153,10 +183,9 @@ interface SlotRow {
 
 /**
  * Las franjas se generan en PostgreSQL (generate_series + AT TIME ZONE), así
- * '2026-10-16 09:00' en APP_TIMEZONE se convierte al instante UTC correcto,
- * incluso en días con cambio de horario.
+ * '2026-10-19 09:00' en APP_TIMEZONE se convierte al instante UTC correcto.
  */
-async function querySlots(tx: Tx | typeof prisma, categoryId: string, date: string): Promise<SlotRow[]> {
+async function querySlots(tx: Tx | typeof prisma, reasonId: string, date: string): Promise<SlotRow[]> {
   const { openingTime, closingTime, slotMinutes } = getBrand().appointments;
   return tx.$queryRaw<SlotRow[]>`
     WITH slots AS (
@@ -170,7 +199,7 @@ async function querySlots(tx: Tx | typeof prisma, categoryId: string, date: stri
     SELECT s.slot_start,
            to_char(s.slot_start AT TIME ZONE ${env.APP_TIMEZONE}, 'HH24:MI') AS label,
            (SELECT count(*)::int FROM tickets t
-             WHERE t.category_id = ${categoryId}::uuid
+             WHERE t.reason_id = ${reasonId}::uuid
                AND t.type = 'SCHEDULED'
                AND t.status <> 'CANCELLED'
                AND t.scheduled_at = s.slot_start) AS booked
@@ -183,17 +212,17 @@ function assertBookableDate(date: string) {
   const diff = daysBetween(businessDate(), date);
   if (diff < 0) throw badRequest('La fecha ya pasó');
   if (diff > maxDaysAhead) throw badRequest(`Sólo se puede agendar hasta ${maxDaysAhead} días hacia adelante`);
-  if (!workingDays.includes(weekday(date))) throw badRequest('La sucursal no atiende ese día');
+  if (!workingDays.includes(weekday(date))) throw badRequest('La oficina no atiende ese día');
 }
 
-export async function getAvailability(input: { branchId: string; categoryId: string; date: string }) {
+export async function getAvailability(input: { branchId: string; reasonId: string; date: string }) {
   assertBookableDate(input.date);
-  const category = await getActiveCategory(prisma, input.branchId, input.categoryId);
-  if (!category.allowAppointments) throw badRequest('Este trámite no admite citas previas');
+  const reason = await getActiveReason(prisma, input.branchId, input.reasonId);
+  if (!reason.allowAppointments) throw badRequest('Este trámite no admite citas previas');
 
   const [capacity, rows] = await Promise.all([
-    slotCapacity(prisma, input.branchId, category.id),
-    querySlots(prisma, category.id, input.date),
+    slotCapacity(prisma, input.branchId, reason.id),
+    querySlots(prisma, reason.id, input.date),
   ]);
   const now = Date.now();
   return {
@@ -207,52 +236,63 @@ export async function getAvailability(input: { branchId: string; categoryId: str
   };
 }
 
-export async function bookAppointment(input: {
-  branchId: string;
-  categoryId: string;
-  customerIdentifier: string;
-  date: string;
-  time: string;
-}) {
+export async function bookAppointment(
+  input: CitizenInput & {
+    branchId: string;
+    reasonId: string;
+    date: string;
+    time: string;
+    preferentialType?: PreferentialType | null;
+  },
+) {
   assertBookableDate(input.date);
 
   const ticket = await prisma.$transaction(async (tx) => {
-    const category = await getActiveCategory(tx, input.branchId, input.categoryId);
-    if (!category.allowAppointments) throw badRequest('Este trámite no admite citas previas');
+    const reason = await getActiveReason(tx, input.branchId, input.reasonId);
+    if (!reason.allowAppointments) throw badRequest('Este trámite no admite citas previas');
 
-    // Serializa reservas concurrentes de la MISMA franja y categoría (lock liberado al hacer COMMIT).
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${category.id}|${input.date}|${input.time}`}))`;
+    await lockCitizen(tx, input);
+    // Serializa reservas concurrentes de la MISMA franja y motivo (lock liberado al hacer COMMIT).
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${reason.id}|${input.date}|${input.time}`}))`;
 
-    const slot = (await querySlots(tx, category.id, input.date)).find((s) => s.label === input.time);
+    const slot = (await querySlots(tx, reason.id, input.date)).find((s) => s.label === input.time);
     if (!slot) throw badRequest('Horario fuera de la grilla de atención');
     if (slot.slot_start.getTime() <= Date.now()) throw badRequest('Ese horario ya pasó');
-    if (slot.booked >= (await slotCapacity(tx, input.branchId, category.id))) {
-      throw conflict('Ese horario se acaba de ocupar, elegí otro', 'SLOT_FULL');
+    if (slot.booked >= (await slotCapacity(tx, input.branchId, reason.id))) {
+      throw conflict('Ese horario se acaba de ocupar, elija otro', 'SLOT_FULL');
     }
 
     const duplicate = await tx.ticket.findFirst({
       where: {
-        categoryId: category.id,
+        branchId: input.branchId,
         serviceDate: toDbDate(input.date),
-        customerIdentifier: input.customerIdentifier,
+        idOrigin: input.idOrigin,
+        idNumber: input.idNumber,
         type: 'SCHEDULED',
         status: { in: ['WAITING', 'CALLED', 'IN_SERVICE'] },
       },
     });
-    if (duplicate) throw conflict(`Ya tenés una cita para ese día (${duplicate.code})`, 'DUPLICATE_APPOINTMENT');
+    if (duplicate) throw conflict(`Ya tiene una cita para ese día (${duplicate.code})`, 'DUPLICATE_APPOINTMENT');
 
-    const n = await nextTicketNumber(tx, category.id, input.date);
+    const n = await nextTicketNumber(tx, input.branchId, reason.prefixLetter, input.date);
+    await citizenLookupService.remember(input.idOrigin, input.idNumber, input.citizenName, tx);
+
     return tx.ticket.create({
       data: {
         branchId: input.branchId,
-        categoryId: category.id,
+        reasonId: reason.id,
         ticketNumber: n,
-        code: formatTicketCode(category.prefixLetter, n),
-        customerIdentifier: input.customerIdentifier,
+        code: formatTicketCode(reason.prefixLetter, n),
         type: 'SCHEDULED',
         scheduledAt: slot.slot_start,
-        priorityLevel: category.priorityLevel,
+        idOrigin: input.idOrigin,
+        idNumber: input.idNumber,
+        citizenName: input.citizenName,
+        preferentialType: input.preferentialType ?? null,
+        priorityLevel: priorityFor(reason.priorityLevel, input.preferentialType),
         serviceDate: toDbDate(input.date),
+        // El desglose de una cita refleja el momento agendado de la atención
+        ...temporalParts(slot.slot_start),
       },
       include: ticketInclude,
     });
@@ -266,20 +306,21 @@ export async function bookAppointment(input: {
  * Check-in en el tótem: la cita de hoy pasa a ser despachable.
  * Se permite desde `checkInEarlyMinutes` antes del horario agendado.
  */
-export async function checkInAppointment(input: { branchId: string; customerIdentifier: string }) {
+export async function checkInAppointment(input: { branchId: string; idOrigin: IdOrigin; idNumber: string }) {
   const { checkInEarlyMinutes } = getBrand().appointments;
   const appt = await prisma.ticket.findFirst({
     where: {
       branchId: input.branchId,
       serviceDate: toDbDate(businessDate()),
-      customerIdentifier: input.customerIdentifier,
+      idOrigin: input.idOrigin,
+      idNumber: input.idNumber,
       type: 'SCHEDULED',
       status: 'WAITING',
       checkedInAt: null,
     },
     orderBy: { scheduledAt: 'asc' },
   });
-  if (!appt) throw notFound('No encontramos una cita para hoy con ese dato');
+  if (!appt) throw notFound('No encontramos una cita para hoy con esa cédula');
 
   const earliest = appt.scheduledAt!.getTime() - checkInEarlyMinutes * 60_000;
   if (Date.now() < earliest) {
@@ -288,7 +329,7 @@ export async function checkInAppointment(input: { branchId: string; customerIden
       hour: '2-digit',
       minute: '2-digit',
     });
-    throw badRequest(`Tu cita es a las ${time}. Podés presentarte desde ${checkInEarlyMinutes} minutos antes.`);
+    throw badRequest(`Su cita es a las ${time}. Puede registrar su llegada desde ${checkInEarlyMinutes} minutos antes.`);
   }
 
   const res = await prisma.ticket.updateMany({

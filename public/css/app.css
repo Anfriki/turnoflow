@@ -192,3 +192,120 @@ body.display {
 .launcher a { text-decoration: none; color: inherit; }
 .launcher .card:hover { box-shadow: 0 10px 28px rgba(16,24,40,.14); }
 .launcher h2 { margin: 0 0 6px; color: var(--brand-primary); }
+
+/* ═════════ ATENCIÓN AL CIUDADANO ═════════ */
+.container.wide { max-width: 1400px; }
+.narrow { max-width: 620px; }
+.row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+.step { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; font-size: 1.3rem; }
+.step span {
+  width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 1rem;
+  background: var(--brand-primary); color: var(--brand-primary-contrast);
+}
+.btn.sm { padding: 6px 10px; font-size: .85rem; }
+
+/* Selector segmentado (V/E/J/G, preferencial) */
+.seg { display: inline-flex; border-radius: 10px; overflow: hidden; box-shadow: inset 0 0 0 1px #cfd8e3; flex-shrink: 0; }
+.seg button { border: 0; background: #fff; padding: 12px 16px; font-weight: 700; color: var(--brand-muted); min-width: 48px; }
+.seg button + button { border-left: 1px solid #cfd8e3; }
+.seg button[aria-checked="true"] { background: var(--brand-primary); color: var(--brand-primary-contrast); }
+.seg.wide { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; box-shadow: none; overflow: visible; }
+.seg.wide button { font-weight: 600; border-radius: 10px; box-shadow: inset 0 0 0 1px #cfd8e3; border-left: 0; padding: 14px 10px; }
+
+/* Cédula */
+.cedula-row { display: flex; gap: 8px; align-items: stretch; }
+.cedula-row .cedula-input { flex: 1; min-width: 0; font-size: 1.6rem; font-weight: 700; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+.cedula-row.compact select { width: 64px; }
+.cedula-row.compact input { flex: 1; min-width: 0; }
+.cedula-row select, .cedula-row input { padding: 12px 14px; border-radius: 10px; border: 1px solid #cfd8e3; background: #fff; color: #111; }
+.lookup-status { min-height: 1.4em; font-size: .95rem; color: var(--brand-muted); }
+.lookup-status.ok { color: var(--brand-success); font-weight: 600; }
+.lookup-status.warn { color: #8a6100; font-weight: 600; }
+.keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.keypad button {
+  padding: 16px 0; font-size: 1.6rem; font-weight: 700; border: 0; border-radius: 10px;
+  background: #eef2f7; color: var(--brand-text); touch-action: manipulation;
+}
+.keypad button:active { background: #dbe3ee; }
+.keypad .muted-key { font-size: 1.05rem; color: var(--brand-muted); }
+.big-select { font-size: 1.15rem; padding: 14px !important; }
+.reason-desc { min-height: 1.2em; margin: 4px 0 0; font-size: .9rem; }
+.ticket-cedula { font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; }
+.pill.pref { background: color-mix(in srgb, var(--brand-secondary) 14%, #fff); color: var(--brand-secondary); }
+
+/* Taquilla */
+.cedula-big { font-size: 3.6rem; font-weight: 900; color: var(--brand-primary); line-height: 1.1; margin-top: 10px; font-variant-numeric: tabular-nums; }
+.citizen-name { font-size: 1.5rem; font-weight: 700; }
+.queue-list li.not-mine { opacity: .5; }
+
+/* Modales (<dialog>) */
+dialog.modal {
+  border: 0; border-radius: var(--brand-radius); padding: 24px; width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px); overflow: auto; box-shadow: 0 24px 60px rgba(0,0,0,.3); color: var(--brand-text);
+}
+dialog.modal.wide { width: min(820px, calc(100vw - 32px)); }
+dialog.modal::backdrop { background: rgba(10, 20, 40, .55); }
+fieldset.field { border: 0; padding: 0; margin: 0 0 14px; }
+fieldset.field legend { font-size: .9rem; color: var(--brand-muted); font-weight: 600; margin-bottom: 6px; }
+textarea { font: inherit; padding: 12px 14px; border-radius: 10px; border: 1px solid #cfd8e3; resize: vertical; width: 100%; }
+.resolution-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.resolution-option {
+  display: flex; gap: 10px; align-items: flex-start; padding: 12px; border-radius: 10px; cursor: pointer;
+  box-shadow: inset 0 0 0 1px #cfd8e3; border-left: 6px solid var(--res-color, #999);
+}
+.resolution-option input { margin-top: 4px; accent-color: var(--res-color); }
+.resolution-option span { display: flex; flex-direction: column; }
+.resolution-option small { color: var(--brand-muted); }
+.resolution-option:has(input:checked) { box-shadow: inset 0 0 0 2px var(--res-color); background: color-mix(in srgb, var(--res-color) 8%, #fff); }
+
+/* Colores por resultado de la petición */
+.res-RESUELTO { --res-color: var(--brand-success); }
+.res-EN_TRAMITE { --res-color: #1f6fd1; }
+.res-REMITIDO { --res-color: #7b4bc4; }
+.res-NO_PROCEDE { --res-color: var(--brand-danger); }
+.res-PENDIENTE_RECAUDOS { --res-color: #b07800; }
+span.res {
+  display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: .78rem; font-weight: 700; white-space: nowrap;
+  color: var(--res-color, #555); background: color-mix(in srgb, var(--res-color, #999) 13%, #fff);
+}
+
+/* Consultas */
+.filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 14px; margin-bottom: 16px; }
+.filters .field { margin-bottom: 10px; }
+.filters .field select, .filters .field input { padding: 9px 10px; }
+.filters .span2, .form-grid .span2 { grid-column: span 2; }
+.filter-actions { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.check { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-weight: 600; }
+.table-wrap { overflow-x: auto; background: var(--brand-surface); border-radius: var(--brand-radius); box-shadow: 0 1px 2px rgba(16,24,40,.06); }
+.data-table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.data-table th { text-align: left; font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: var(--brand-muted); background: #f7f9fc; }
+.data-table th, .data-table td { padding: 10px 12px; border-bottom: 1px solid #eef1f5; vertical-align: top; }
+.data-table tbody tr[data-i] { cursor: pointer; }
+.data-table tbody tr[data-i]:hover, .data-table tbody tr[data-i]:focus { background: color-mix(in srgb, var(--brand-primary) 5%, #fff); outline: none; }
+.data-table.compact th, .data-table.compact td { padding: 6px 8px; }
+.data-table tr.inactive td { opacity: .55; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.nowrap { white-space: nowrap; }
+.center { text-align: center; }
+.pager { display: flex; align-items: center; gap: 10px; }
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: 16px; }
+.summary-grid h3 { margin-top: 0; }
+.summary-grid .card { min-width: 0; overflow-x: auto; }
+.data-table td.label { min-width: 160px; }
+.filters .error-msg { grid-column: 1 / -1; margin: 6px 0 0; min-height: 0; }
+@media (max-width: 520px) { .summary-grid { grid-template-columns: 1fr; } .filters .span2 { grid-column: auto; } }
+.kv { border-collapse: collapse; width: 100%; }
+.kv th { text-align: left; color: var(--brand-muted); font-weight: 600; padding: 6px 12px 6px 0; width: 42%; vertical-align: top; }
+.kv td { padding: 6px 0; }
+.notes { white-space: pre-wrap; background: #f7f9fc; padding: 12px; border-radius: 10px; }
+
+/* TV: llamado por cédula */
+.now-calling .code.cedula { font-size: min(12vh, 6.2vw); letter-spacing: .2vh; white-space: nowrap; }
+.history-row { grid-template-columns: 1fr auto; gap: 1vw; }
+.history-row > span:first-child { white-space: nowrap; font-size: 4.4vh; font-variant-numeric: tabular-nums; }
+.history-row .desk { white-space: nowrap; }
+.now-calling .pass { font-size: 3.4vh; text-transform: uppercase; letter-spacing: .4vh; opacity: .85; min-height: 1em; }
+.display-waiting .chip.pref { background: color-mix(in srgb, var(--brand-secondary) 45%, transparent); }

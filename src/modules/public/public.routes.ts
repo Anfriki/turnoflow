@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { env, isProd } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { notFound } from '../../lib/errors.js';
+import { checkCitizenId, CitizenNameSchema, IdNumberSchema, IdOriginSchema, maskName } from '../../lib/cedula.js';
 import { validate } from '../../middleware/validate.js';
+import { citizenLookupService } from '../citizens/citizen-lookup.service.js';
 import { getQueueSnapshot } from '../tickets/queue.service.js';
 import {
   bookAppointment,
@@ -15,23 +17,31 @@ import {
   issueWalkInTicket,
 } from '../tickets/tickets.service.js';
 
-/** Endpoints sin autenticación: tótem, web de clientes y pantalla de sala. */
+/** Endpoints sin autenticación: tótem, web ciudadana y pantalla de sala. */
 export const publicRouter = Router();
 
+const limiter = (limit: number, message: string) =>
+  rateLimit({
+    windowMs: 60_000,
+    limit,
+    skip: () => !isProd,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'RATE_LIMITED', message },
+  });
+
 // Freno a abusos de emisión desde una misma IP (desactivado fuera de producción).
-const issueLimiter = rateLimit({
-  windowMs: 60_000,
-  limit: env.RATE_LIMIT_PUBLIC_PER_MIN,
-  skip: () => !isProd,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  message: { error: 'RATE_LIMITED', message: 'Demasiadas solicitudes, intentá de nuevo en un minuto' },
-});
+const issueLimiter = limiter(env.RATE_LIMIT_PUBLIC_PER_MIN, 'Demasiadas solicitudes, intente de nuevo en un minuto');
+// La consulta de cédulas devuelve datos personales: límite más estricto contra la enumeración.
+const lookupLimiter = limiter(env.RATE_LIMIT_LOOKUP_PER_MIN, 'Demasiadas consultas de cédula, intente de nuevo en un minuto');
 
 const uuid = z.string().uuid();
-const customerIdentifier = z.string().trim().min(3, 'Mínimo 3 caracteres').max(80);
 const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato YYYY-MM-DD');
 const hhmm = z.string().regex(/^\d{2}:\d{2}$/, 'Formato HH:mm');
+const preferentialType = z.enum(['TERCERA_EDAD', 'EMBARAZADA', 'DISCAPACIDAD']).nullable().optional();
+
+const citizenId = { idOrigin: IdOriginSchema, idNumber: IdNumberSchema };
+const citizen = { ...citizenId, citizenName: CitizenNameSchema };
 
 publicRouter.get('/branches', async (_req, res) => {
   res.json(
@@ -43,6 +53,7 @@ publicRouter.get('/branches', async (_req, res) => {
   );
 });
 
+/** Sede + motivos de atención activos (alimenta el selector del tótem). */
 publicRouter.get(
   '/branches/:code',
   validate({ params: z.object({ code: z.string().min(1).max(20) }) }),
@@ -54,13 +65,15 @@ publicRouter.get(
         name: true,
         code: true,
         address: true,
-        categories: {
+        reasons: {
           where: { isActive: true },
-          orderBy: [{ priorityLevel: 'desc' }, { name: 'asc' }],
+          orderBy: [{ department: 'asc' }, { name: 'asc' }],
           select: {
             id: true,
+            code: true,
             name: true,
-            prefixLetter: true,
+            description: true,
+            department: true,
             priorityLevel: true,
             estimatedDurationMin: true,
             allowAppointments: true,
@@ -68,7 +81,7 @@ publicRouter.get(
         },
       },
     });
-    if (!branch) throw notFound('Sucursal no encontrada');
+    if (!branch) throw notFound('Sede no encontrada');
     res.json(branch);
   },
 );
@@ -78,16 +91,28 @@ publicRouter.get('/branches/:id/queue', validate({ params: z.object({ id: uuid }
   res.json(await getQueueSnapshot(res.locals.params.id));
 });
 
+// ── Consulta de ciudadano (autocompletado del nombre) ──
+publicRouter.get(
+  '/citizens/lookup',
+  lookupLimiter,
+  validate({ query: z.object(citizenId).superRefine(checkCitizenId) }),
+  async (_req, res) => {
+    const { idOrigin, idNumber } = res.locals.query;
+    const result = await citizenLookupService.lookup(idOrigin, idNumber);
+    res.json(
+      env.CITIZEN_LOOKUP_MASK_PUBLIC && result.fullName
+        ? { ...result, fullName: maskName(result.fullName), masked: true }
+        : { ...result, masked: false },
+    );
+  },
+);
+
 // ── Turnos presenciales ──
 publicRouter.post(
   '/tickets',
   issueLimiter,
   validate({
-    body: z.object({
-      branchId: uuid,
-      categoryId: uuid,
-      customerIdentifier: customerIdentifier.optional().or(z.literal('')),
-    }),
+    body: z.object({ branchId: uuid, reasonId: uuid, preferentialType, ...citizen }).superRefine(checkCitizenId),
   }),
   async (_req, res) => {
     res.status(201).json(await issueWalkInTicket(res.locals.body));
@@ -105,7 +130,7 @@ publicRouter.post('/tickets/:id/cancel', validate({ params: z.object({ id: uuid 
 // ── Citas previas ──
 publicRouter.get(
   '/appointments/availability',
-  validate({ query: z.object({ branchId: uuid, categoryId: uuid, date: ymd }) }),
+  validate({ query: z.object({ branchId: uuid, reasonId: uuid, date: ymd }) }),
   async (_req, res) => {
     res.json(await getAvailability(res.locals.query));
   },
@@ -114,7 +139,11 @@ publicRouter.get(
 publicRouter.post(
   '/appointments',
   issueLimiter,
-  validate({ body: z.object({ branchId: uuid, categoryId: uuid, customerIdentifier, date: ymd, time: hhmm }) }),
+  validate({
+    body: z
+      .object({ branchId: uuid, reasonId: uuid, date: ymd, time: hhmm, preferentialType, ...citizen })
+      .superRefine(checkCitizenId),
+  }),
   async (_req, res) => {
     res.status(201).json(await bookAppointment(res.locals.body));
   },
@@ -123,7 +152,7 @@ publicRouter.post(
 publicRouter.post(
   '/appointments/check-in',
   issueLimiter,
-  validate({ body: z.object({ branchId: uuid, customerIdentifier }) }),
+  validate({ body: z.object({ branchId: uuid, ...citizenId }).superRefine(checkCitizenId) }),
   async (_req, res) => {
     res.json(await checkInAppointment(res.locals.body));
   },

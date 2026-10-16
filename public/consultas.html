@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Consultas</title>
+  <link rel="stylesheet" href="/brand.css" />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <header class="brand-bar">
+    <img class="logo" data-brand="logo" alt="" />
+    <div class="names"><span class="company" data-brand="company"></span><span class="tagline">Consultas y reportes</span></div>
+    <div class="spacer"></div>
+    <div class="meta" id="who"></div>
+  </header>
+
+  <main class="container wide">
+    <!-- Login -->
+    <section id="login-view" hidden>
+      <div class="card" style="max-width:420px;margin:40px auto">
+        <h2 style="margin-top:0">Ingreso de supervisores</h2>
+        <form id="login-form">
+          <div class="field"><label for="email">Correo institucional</label><input id="email" type="email" required autocomplete="username" /></div>
+          <div class="field"><label for="password">Contraseña</label><input id="password" type="password" required autocomplete="current-password" /></div>
+          <p class="error-msg" id="login-error" role="alert"></p>
+          <button class="btn lg" type="submit" style="width:100%">Ingresar</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="app-view" hidden>
+      <div class="row-between">
+        <nav class="tabs" role="tablist" id="tabs">
+          <button role="tab" data-tab="list" aria-selected="true">Atenciones</button>
+          <button role="tab" data-tab="summary" aria-selected="false">Resumen</button>
+          <button role="tab" data-tab="reasons" aria-selected="false">Motivos de atención</button>
+        </nav>
+        <button class="btn ghost" id="logout">Salir</button>
+      </div>
+
+      <!-- Filtros compartidos por Atenciones y Resumen -->
+      <form class="card filters" id="filters" data-for="list summary">
+        <div class="field" id="f-branch-wrap" hidden><label for="f-branch">Sede</label><select id="f-branch" name="branchId"></select></div>
+        <div class="field">
+          <label for="f-idNumber">Cédula</label>
+          <div class="cedula-row compact">
+            <select name="idOrigin" aria-label="Origen"><option value="">—</option><option>V</option><option>E</option><option>J</option><option>G</option></select>
+            <input id="f-idNumber" name="idNumber" inputmode="numeric" placeholder="Número" />
+          </div>
+        </div>
+        <div class="field"><label for="f-name">Nombre</label><input id="f-name" name="name" placeholder="Parte del nombre" /></div>
+        <div class="field"><label for="f-from">Desde</label><input id="f-from" name="from" type="date" /></div>
+        <div class="field"><label for="f-to">Hasta</label><input id="f-to" name="to" type="date" /></div>
+        <div class="field"><label for="f-year">Año</label><select id="f-year" name="year"></select></div>
+        <div class="field"><label for="f-month">Mes</label><select id="f-month" name="month"></select></div>
+        <div class="field"><label for="f-day">Día</label><select id="f-day" name="day"></select></div>
+        <div class="field"><label for="f-desk">Taquilla</label><select id="f-desk" name="deskNumber"></select></div>
+        <div class="field"><label for="f-operator">Funcionario</label><select id="f-operator" name="operatorId"></select></div>
+        <div class="field span2"><label for="f-reason">Motivo</label><select id="f-reason" name="reasonId"></select></div>
+        <div class="field span2"><label for="f-department">Dirección</label><select id="f-department" name="department"></select></div>
+        <div class="field"><label for="f-status">Estatus</label><select id="f-status" name="status"></select></div>
+        <div class="field"><label for="f-resolution">Resultado</label><select id="f-resolution" name="resolutionStatus"></select></div>
+        <div class="field"><label for="f-type">Tipo</label>
+          <select id="f-type" name="type"><option value="">Todos</option><option value="WALK_IN">Presencial</option><option value="SCHEDULED">Cita</option></select></div>
+        <div class="field"><label for="f-pref">Preferencial</label>
+          <select id="f-pref" name="preferential"><option value="">Todos</option><option value="true">Sí</option><option value="false">No</option></select></div>
+        <div class="filter-actions">
+          <button class="btn" type="submit">Buscar</button>
+          <button class="btn ghost" type="button" id="f-today">Hoy</button>
+          <button class="btn ghost" type="reset">Limpiar</button>
+          <button class="btn secondary" type="button" id="f-csv">Exportar CSV</button>
+        </div>
+        <p class="error-msg" id="filters-error" role="alert"></p>
+      </form>
+
+      <!-- Atenciones -->
+      <section data-panel="list">
+        <div class="row-between"><p class="muted" id="list-count"></p><div class="pager" id="pager"></div></div>
+        <div class="table-wrap">
+          <table class="data-table" id="list-table">
+            <thead><tr>
+              <th>Fecha</th><th>Hora</th><th>Turno</th><th>Cédula</th><th>Ciudadano</th><th>Motivo</th>
+              <th>Taquilla</th><th>Funcionario</th><th>Estatus</th><th>Resultado</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Resumen -->
+      <section data-panel="summary" hidden>
+        <div class="summary-grid" id="summary"></div>
+      </section>
+
+      <!-- Motivos -->
+      <section data-panel="reasons" hidden>
+        <div class="row-between">
+          <p class="muted">Los motivos activos aparecen en el tótem al instante. Los que tienen atenciones registradas sólo pueden desactivarse.</p>
+          <button class="btn" id="reason-new">+ Nuevo motivo</button>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table" id="reasons-table">
+            <thead><tr><th>Código</th><th>Motivo</th><th>Dirección</th><th>Prefijo</th><th>Prioridad</th><th>Duración</th><th>Citas</th><th>Usos</th><th>Estado</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <!-- Detalle de una atención -->
+  <dialog id="detail-dialog" class="modal wide"><div id="detail"></div>
+    <div class="row-between" style="margin-top:16px"><span></span><button class="btn ghost" id="detail-close">Cerrar</button></div>
+  </dialog>
+
+  <!-- Alta / edición de motivo -->
+  <dialog id="reason-dialog" class="modal">
+    <form id="reason-form" novalidate>
+      <h2 style="margin-top:0" id="reason-title">Nuevo motivo</h2>
+      <div class="form-grid">
+        <div class="field"><label for="r-code">Código</label><input id="r-code" name="code" placeholder="NOM-01" maxlength="20" required /></div>
+        <div class="field"><label for="r-prefix">Prefijo del turno</label><input id="r-prefix" name="prefixLetter" placeholder="N" maxlength="3" required /></div>
+        <div class="field span2"><label for="r-name">Nombre del trámite</label><input id="r-name" name="name" maxlength="120" required /></div>
+        <div class="field span2"><label for="r-dept">Dirección / unidad responsable</label><input id="r-dept" name="department" list="r-depts" maxlength="150" required /><datalist id="r-depts"></datalist></div>
+        <div class="field span2"><label for="r-desc">Descripción (opcional)</label><textarea id="r-desc" name="description" rows="2" maxlength="1000"></textarea></div>
+        <div class="field"><label for="r-prio">Prioridad (0 = normal)</label><input id="r-prio" name="priorityLevel" type="number" min="0" max="100" value="0" /></div>
+        <div class="field"><label for="r-dur">Duración estimada (min)</label><input id="r-dur" name="estimatedDurationMin" type="number" min="1" max="480" value="10" /></div>
+        <label class="check"><input type="checkbox" name="allowAppointments" checked /> Admite citas web</label>
+        <label class="check"><input type="checkbox" name="isActive" checked /> Activo</label>
+      </div>
+      <p class="error-msg" id="reason-error" role="alert"></p>
+      <div class="row-between">
+        <button type="button" class="btn ghost" id="reason-cancel">Cancelar</button>
+        <button type="submit" class="btn">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/js/consultas.js"></script>
+</body>
+</html>
