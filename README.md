@@ -4,14 +4,17 @@ Sistema de turnos y gestión de colas para la **Oficina de Atención al Ciudadan
 
 Qué cubre:
 
-- **Registro de entrada por cédula.** El ciudadano elige el origen del documento (`V`, `E`, `J`, `G`) y escribe el número. El nombre se **autocompleta** desde un servicio de identidad (SAIME, nómina o padrón) o desde la cache local, y sigue siendo editable.
-- **Motivos de atención dinámicos.** Es una tabla maestra que administra el propio ministerio, sin trámites fijos en el código. Cada motivo pertenece a una **Dirección** o unidad.
-- **Atención preferencial** para tercera edad, embarazadas y personas con discapacidad, con prioridad en la cola.
+- **Registro de entrada en 3 pasos** (catálogo real del MPPE, ver [sección 7](#7-motivos-de-atención)):
+  1. **Identificación:** cédula `V` o `E`, con el nombre **autocompletado** desde un servicio de identidad (SAIME, nómina o padrón) o desde la cache local. El nombre sigue siendo editable. Incluye un check opcional de atención preferencial.
+  2. **Dependencia:** 🏢 Zona Educativa (Caracas / Distrito Capital) o 🏛️ Atención al Ciudadano (nacional / otros estados). La dependencia define el prefijo del turno: `ZE-001` u `OAC-001`.
+  3. **Trámite:** las 7 Direcciones (Ingreso, Egreso, Nómina, Gremiales, Registro de Personal, Asesoría Jurídica, Registro y Control de Estudio) y sus 38 trámites.
+- **Motivos y dependencias administrables:** tablas maestras que gestiona el propio ministerio, sin trámites fijos en el código.
+- **Atención preferencial** para adultos mayores, embarazadas y personas con discapacidad, con prioridad en la cola.
 - **Citas previas por web**, con check-in por cédula el día de la cita.
-- **Despacho a taquillas** seguro ante concurrencia (`FOR UPDATE SKIP LOCKED`).
-- **Pantalla de sala:** *"Cédula V-12.345.678 · pase a · Taquilla N° 3"*, con sonido y voz.
+- **Despacho a 12 taquillas especializadas** por dependencia y Dirección, seguro ante concurrencia (`FOR UPDATE SKIP LOCKED`).
+- **Pantalla de sala:** *"Turno ZE-001 · V-12.345.678 · pase a · Taquilla N° 3"*, con sonido y voz.
 - **Cierre obligatorio con resultado de la petición:** resuelto, en trámite, remitido, no procede o pendiente de recaudos; con observaciones y la dependencia de destino cuando se remite.
-- **Reportería ministerial:** filtros por fecha, año, mes, día, taquilla, funcionario, motivo, Dirección, estatus y resultado; resúmenes y exportación CSV para Excel.
+- **Reportería ministerial:** filtros por fecha, año, mes, día, taquilla, funcionario, dependencia, trámite, Dirección, estatus y resultado; resúmenes y exportación CSV para Excel.
 
 | Vista | URL | Quién la usa |
 |---|---|---|
@@ -107,6 +110,7 @@ npm run db:seed        # datos de ejemplo (idempotente)
 |---|---|
 | `20261016000000_init` | Esquema base: sedes, colas, boxes, usuarios, turnos, contadores e índices de despacho |
 | `20261017000000_ministerio_atencion_ciudadano` | Adaptación ministerial. Ver detalle abajo. |
+| `20261018000000_dependencias_atencion` | Tablas `dependencies` y `desk_dependencies`, `tickets.dependency_id` y orden de los trámites (`sort_order`). Es solo aditiva: no modifica datos existentes. |
 
 La segunda migración hace lo siguiente:
 
@@ -122,22 +126,45 @@ La segunda migración hace lo siguiente:
 
 Para borrar todo y empezar de cero (**destruye los datos**): `npm run db:reset`.
 
-**El seed crea:**
+**El seed crea** el catálogo del MPPE según el documento *PROCESOS POR DIRECCION.xlsx*. Es idempotente: si la base ya tenía otros motivos, el seed los **desactiva** (no los borra, para conservar el histórico de reportes).
 
 **Sedes:**
-- `SEDE` (Sede Central): 11 motivos y 7 taquillas. La Taquilla N° 7 atiende todos los motivos.
-- `REGIONAL` (Oficina Regional): 5 motivos y 2 taquillas.
+- `SEDE` (Sede Central): 2 dependencias, 38 trámites y 12 taquillas.
+- `REGIONAL` (Oficina Regional): sólo Atención al Ciudadano, 38 trámites y 2 taquillas polivalentes.
 
-**Motivos por Dirección:**
+**Dependencias (paso 2 del tótem):**
 
-| Dirección | Motivos |
-|---|---|
-| Nómina y Pagos | Reclamo de Nómina (`NOM-01`), Recibos de Pago / ARC (`NOM-03`) |
-| Recursos Humanos | Constancia de Trabajo (`NOM-02`), Actualización de Datos (`RRHH-01`), Vacaciones, Permisos y Reposos (`RRHH-02`) |
-| Seguridad Social | Solicitud de Jubilación (`JUB-01`), Solicitud de Pensión (`JUB-02`) |
-| Archivo | Entrega de Documentos / Recaudos (`DOC-01`) |
-| Consultoría Jurídica | Asesoría Legal Laboral (`JUR-01`) |
-| Atención al Ciudadano | Consultas Generales (`OAC-01`), Denuncias, Quejas y Sugerencias (`OAC-02`) |
+| Código | Dependencia | Prefijo | Para quién |
+|---|---|---|---|
+| `ZE` | 🏢 Zona Educativa (Caracas / Distrito Capital) | `ZE-001` | Personal docente, administrativo u obrero de planteles de Caracas |
+| `OAC` | 🏛️ Atención al Ciudadano (Nacional / Otros Estados) | `OAC-001` | Personal de los estados del interior, usuarios externos o trámites generales |
+
+**Direcciones y trámites (paso 3 del tótem):**
+
+| Dirección | Códigos | Trámites |
+|---|---|---|
+| Ingreso | `ING-01` … `ING-13` | Clasificación, corrección o cambio de cuenta bancaria, sinceración de personal, traslado, incremento de horas, concentración de carga horaria, regularización de cargo, ingresos, desafiliación de sindicatos, corrección de datos, prima por profesionalización, prima geográfica, prima por hijos |
+| Egreso | `EGR-01` … `EGR-08` | Solicitud de jubilación ⚑, pensión de sobreviviente ⚑, FP023, autorización al cobro, solicitud 14100, solicitud 1408, renuncia, egreso por fallecimiento |
+| Nómina | `NOM-01` … `NOM-03` | Consulta de estatus del personal, constancia de trabajo, recibo de pago |
+| Gremiales | `GRE-01` … `GRE-09` | Reconocimiento de años privados y públicos, reactivación, permisos (cuido, pre y post natal, fallecimiento, estudios, matrimonio), salarios no cancelados, cambio de modalidad de pago |
+| Registro de Personal | `REG-01` | Vacaciones |
+| Asesoría Jurídica | `JUR-01` | Consultas y asesoría jurídica laboral |
+| Registro y Control de Estudio | `EST-01` … `EST-03` | Legalización de título de bachiller, legalización de notas certificadas, copia certificada del título (CCRT) |
+
+⚑ = prioridad alta: se atiende antes que otros trámites de la misma taquilla.
+
+Las duraciones estimadas (6 a 25 min) no vienen en el documento: son valores iniciales razonables que se ajustan desde *Consultas → Motivos de atención*.
+
+**Distribución de taquillas (Sede Central):**
+
+| Taquillas | Dependencia | Direcciones |
+|---|---|---|
+| 1 a 3 | Zona Educativa | Nómina, Ingreso y Registro de Personal |
+| 4 y 5 | Zona Educativa | Gremiales (permisos) y Asesoría Jurídica |
+| 6 a 8 | Atención al Ciudadano | Ingreso, Nómina, Gremiales, Registro de Personal y Asesoría Jurídica |
+| 9 y 10 | Ambas | Egreso / Seguridad Social (jubilaciones, pensiones, FP023, 14100, 1408) |
+| 11 | Ambas | Registro y Control de Estudio (títulos, notas, CCRT) |
+| 12 | Ambas | **Polivalente:** cualquier trámite, de apoyo en alta demanda |
 
 **Funcionarios:**
 
@@ -145,7 +172,7 @@ Para borrar todo y empezar de cero (**destruye los datos**): `npm run db:reset`.
 |---|---|---|---|
 | `admin@ministerio.local` | `Admin123!` | ADMIN | todas |
 | `supervisor@ministerio.local` | `Super123!` | SUPERVISOR | SEDE |
-| `taquilla1@ministerio.local` … `taquilla4@ministerio.local` | `Taquilla123!` | OPERATOR | SEDE |
+| `taquilla1@ministerio.local` … `taquilla12@ministerio.local` | `Taquilla123!` | OPERATOR | SEDE (uno por taquilla) |
 | `regional@ministerio.local` | `Taquilla123!` | OPERATOR | REGIONAL |
 
 **Cédulas del registro simulado (`mock`):**
@@ -156,7 +183,6 @@ Para borrar todo y empezar de cero (**destruye los datos**): `npm run db:reset`.
 | `V-87654321` | José Gregorio Rodríguez Méndez |
 | `V-5123456` | Carmen Elena Silva de Ramírez |
 | `E-84123456` | Giuseppe Antonio Russo Bianchi |
-| `J-123456789` | Distribuidora Ejemplo C.A. |
 
 Cualquier otra cédula responde "no registrada" y el ciudadano escribe su nombre.
 
@@ -170,7 +196,9 @@ Cualquier otra cédula responde "no registrada" y el ciudadano escribe su nombre
 | Tabla | Contenido |
 |---|---|
 | `branches` | Sedes u oficinas de atención |
-| `attention_reasons` | **Motivos de atención**: código, nombre, descripción, Dirección, prefijo del turno, prioridad, duración estimada, si admite citas, activo |
+| `dependencies` | **Dependencias** (Zona Educativa, Atención al Ciudadano): código, nombre, descripción, ícono, **prefijo del turno**, orden, activa |
+| `desk_dependencies` | Qué dependencias atiende cada taquilla. Sin filas, atiende todas. |
+| `attention_reasons` | **Motivos de atención (trámites)**: código, nombre, descripción, Dirección, prefijo de respaldo, prioridad, duración estimada, si admite citas, orden, activo |
 | `desks` | **Taquillas**: número (`Taquilla N° 3`), etiqueta y funcionario actual |
 | `desk_reasons` | Qué motivos atiende cada taquilla. Sin filas, atiende todos. |
 | `users` | Funcionarios (ADMIN, SUPERVISOR, OPERATOR), con contraseña bcrypt |
@@ -229,7 +257,7 @@ npm run dev                     # backend + vistas con recarga automática
 El backend sirve también las vistas, así que no hay un segundo servidor que levantar.
 
 - **Inicio:** http://localhost:3000
-- **Tótem:** http://localhost:3000/totem.html?branch=SEDE. Probá la cédula `V` `12345678` y el nombre se completa solo.
+- **Tótem:** http://localhost:3000/totem.html?branch=SEDE. Probá la cédula `V` `12345678` (el nombre se completa solo), elegí Zona Educativa y un trámite de Ingreso: el turno sale `ZE-001` y lo llama la Taquilla N° 1.
 - **Taquilla:** http://localhost:3000/operator.html (`taquilla1@ministerio.local` / `Taquilla123!`)
 - **TV:** http://localhost:3000/display.html?branch=SEDE. Tocá la pantalla una vez para habilitar el sonido.
 - **Consultas:** http://localhost:3000/consultas.html (`supervisor@ministerio.local` / `Super123!`)
@@ -353,7 +381,7 @@ Después de editar, reiniciá el servidor.
 | `citizen.allowedOrigins` | Orígenes de documento habilitados, por ejemplo `['V', 'E']` si no se atiende a personas jurídicas |
 | `citizen.originLabels` | Textos de ayuda de cada origen |
 | `deskLabel` | Formato del nombre de la taquilla: `'Taquilla N° {number}'` o `'Taquilla {number2}'` (con dos dígitos: 01, 02…) |
-| `display.callBy` | `'cedula'` muestra "Cédula V-12.345.678 · pase a · Taquilla N° 3"; `'ticket'` llama por número de turno |
+| `display.callBy` | La TV muestra siempre turno (`ZE-001`), cédula y taquilla. `'cedula'` destaca la cédula; `'ticket'` destaca el número de turno. |
 | `display.maskCedula` | `true` muestra `V-12.345.***` en la TV. En ese caso la voz anuncia el turno y el número completo **nunca** llega a la pantalla. |
 | `display.voiceTemplateCedula` / `voiceTemplateTicket` | Texto de la voz. Variables: `{cedula}`, `{code}`, `{deskNumber}`, `{desk}`, `{reason}`. |
 | `totem.preferentialEnabled` | Mostrar la opción de atención preferencial |
@@ -441,22 +469,39 @@ Registralo en `createProvider()`.
 
 ## 7. Motivos de atención
 
-Es una tabla maestra por sede, administrable sin tocar código.
+### Flujo del tótem (3 pasos)
 
-- **Tótem:** desplegable alimentado desde la base y **agrupado por Dirección**, con la descripción del trámite. Los cambios se ven al volver a la pantalla de inicio.
-- **Panel de administración** (vista *Consultas* → pestaña *Motivos de atención*): alta, edición, activar y desactivar. Pueden hacerlo ADMIN y los SUPERVISOR de esa sede.
-- **Eliminar:** sólo se permite si el motivo no tiene atenciones registradas. Si las tiene, se **desactiva**, para preservar el histórico de los reportes.
-- **Prefijo del turno:** varios motivos pueden compartir prefijo y numeración. Por ejemplo, *Reclamo de Nómina* y *Recibos de Pago* generan `N-001`, `N-002`…
-- **Prioridad:** la del motivo suma a la preferencial. El despacho ordena por prioridad efectiva y luego por orden de llegada.
-- **Taquillas:** cada una puede atender un subconjunto de motivos (`desk_reasons`). Sin asignación, atiende todos.
+| Paso | Qué hace el ciudadano o la recepcionista |
+|---|---|
+| **1. Identificación** | Elige `V` o `E` (configurable en `brand.config.js → citizen.allowedOrigins`; el servidor rechaza los orígenes no habilitados) y escribe el número en el teclado en pantalla. El nombre se autocompleta y sigue siendo editable. Opcionalmente marca **"Requiere atención preferencial"** y elige adulto mayor, embarazada o discapacidad. |
+| **2. Dependencia** | Toca la tarjeta de **Zona Educativa** o de **Atención al Ciudadano**. Si la sede no tiene dependencias cargadas, este paso se saltea. |
+| **3. Trámite** | Toca una de las 7 Direcciones y luego el trámite. "Obtener turno" emite `ZE-###` u `OAC-###`. |
+
+**Reglas del turno:**
+- **Código:** prefijo de la dependencia más correlativo diario. Cada dependencia numera por separado (`ZE-001`, `OAC-001`, `ZE-002`…).
+- **Prioridad:** la prioridad del trámite (jubilación y pensión de sobreviviente) más el bono preferencial (`attention.preferentialBoost`). Dentro de una misma prioridad se atiende por orden de llegada.
+- **Ruteo:** una taquilla sólo llama turnos de **las dependencias y los trámites que atiende**. Por ejemplo, la Taquilla 1 (Zona Educativa) nunca toma un `OAC-…`, y un trámite de Egreso sólo lo toman las taquillas 9, 10 y 12.
+
+### Administración
+
+Dependencias y trámites son tablas maestras por sede, administrables sin tocar código.
+
+- **Trámites:** se gestionan desde *Consultas → Motivos de atención*: alta, edición (incluido el **orden en el tótem**), activar y desactivar. Pueden hacerlo ADMIN y los SUPERVISOR de esa sede.
+- **Orden de las Direcciones en el tótem:** el de su primer trámite (`sortOrder`).
+- **Eliminar un trámite:** sólo se permite si no tiene atenciones registradas. Si las tiene, se **desactiva**, para preservar el histórico de los reportes.
+- **Dependencias:** las gestiona ADMIN por API. Se pueden agregar otras (por ejemplo, una tercera oficina) con su propio prefijo.
+- **Taquillas:** cada una puede limitarse a un subconjunto de trámites (`desk_reasons`) y de dependencias (`desk_dependencies`). Sin asignación, atiende todos.
 
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | `/api/admin/reasons?branchId=&includeInactive=` | Listado, con la cantidad de usos |
-| POST | `/api/admin/reasons` | `{ branchId, code, name, department, prefixLetter, description?, priorityLevel?, estimatedDurationMin?, allowAppointments?, isActive? }` |
+| POST | `/api/admin/reasons` | `{ branchId, code, name, department, prefixLetter, description?, priorityLevel?, estimatedDurationMin?, allowAppointments?, isActive?, sortOrder? }` |
 | PATCH | `/api/admin/reasons/:id` | Edición parcial; `{ isActive: false }` lo desactiva |
 | DELETE | `/api/admin/reasons/:id` | `204`, o `409 REASON_IN_USE` si tiene atenciones |
 | GET | `/api/admin/departments` | Direcciones ya cargadas, para autocompletar |
+| GET | `/api/admin/dependencies?branchId=` | Dependencias de la sede (SUPERVISOR+) |
+| POST / PATCH | `/api/admin/dependencies` · `/:id` | `{ branchId, code, name, prefix, description?, icon?, sortOrder?, isActive? }` (ADMIN) |
+| PATCH | `/api/admin/desks/:id` | `{ reasonIds?, dependencyIds? }`: especialización de la taquilla (ADMIN) |
 
 ---
 
@@ -497,7 +542,7 @@ Es para SUPERVISOR (su sede) y ADMIN (todas las sedes).
 |---|---|
 | Ciudadano | Cédula (origen y número), nombre parcial |
 | Fechas | Rango desde/hasta, año, mes, día |
-| Atención | Taquilla, funcionario, motivo, Dirección |
+| Atención | Taquilla, funcionario, dependencia (ZE / OAC), trámite, Dirección |
 | Estado | Estatus del flujo, resultado de la petición, tipo (presencial o cita), preferencial |
 
 **Pestañas:**
@@ -521,7 +566,7 @@ Es para SUPERVISOR (su sede) y ADMIN (todas las sedes).
 |---|---|
 | Fecha y hora | `from`, `to` (YYYY-MM-DD, día de atención), `year`, `month`, `day`, `dayOfWeek` (1–7), `hour` (0–23) |
 | Taquilla y funcionario | `deskId`, `deskNumber`, `operatorId` |
-| Trámite | `reasonId`, `department` |
+| Trámite | `dependencyId`, `reasonId`, `department` |
 | Estado | `status`, `resolutionStatus`, `type` (`WALK_IN`/`SCHEDULED`), `preferential` (`true`/`false`) |
 | Ciudadano | `idOrigin`, `idNumber`, `name` |
 | Alcance | `branchId` (sólo ADMIN) |
@@ -622,11 +667,11 @@ COMMIT;                                                         -- recién ahora
 | GET | `/api/public/branches` · `/api/public/branches/:code` | Sedes y motivos activos |
 | GET | `/api/public/branches/:id/queue` | Snapshot de la cola, para la TV |
 | GET | `/api/public/citizens/lookup?idOrigin&idNumber` | Autocompletado del nombre: `{ found, fullName, source, masked }` |
-| POST | `/api/public/tickets` | `{ branchId, reasonId, idOrigin, idNumber, citizenName, preferentialType? }` |
+| POST | `/api/public/tickets` | `{ branchId, dependencyId, reasonId, idOrigin, idNumber, citizenName, preferentialType? }`. `dependencyId` es obligatorio si la sede tiene dependencias. |
 | GET | `/api/public/tickets/:id` | Estado, posición y espera estimada |
 | POST | `/api/public/tickets/:id/cancel` | El ciudadano cancela su turno |
-| GET | `/api/public/appointments/availability?branchId&reasonId&date` | Franjas libres |
-| POST | `/api/public/appointments` | `{ branchId, reasonId, date, time, idOrigin, idNumber, citizenName, preferentialType? }` |
+| GET | `/api/public/appointments/availability?branchId&dependencyId&reasonId&date` | Franjas libres (capacidad = taquillas que atienden esa dependencia y trámite) |
+| POST | `/api/public/appointments` | `{ branchId, dependencyId, reasonId, date, time, idOrigin, idNumber, citizenName, preferentialType? }` |
 | POST | `/api/public/appointments/check-in` | `{ branchId, idOrigin, idNumber }` |
 
 ### Autenticación

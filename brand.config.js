@@ -15,7 +15,7 @@
  * ─────────────────────────────────────────────────────────────
  */
 export default {
-  companyName: 'Ministerio de Gestión Pública',
+  companyName: 'Ministerio del Poder Popular para la Educación',
   tagline: 'Oficina de Atención al Ciudadano',
   locale: 'es-VE',
 
@@ -50,8 +50,8 @@ export default {
   /** Identificación del ciudadano */
   citizen: {
     /** Orígenes de documento habilitados en el tótem y la web. */
-    allowedOrigins: ['V', 'E', 'J', 'G'],
-    originLabels: { V: 'Venezolano', E: 'Extranjero', J: 'Jurídico (RIF)', G: 'Gobierno (RIF)' },
+    allowedOrigins: ['V', 'E'/*, 'J', 'G'*/],
+    originLabels: { V: 'Venezolano', E: 'Extranjero'/*, J: 'Jurídico (RIF)', G: 'Gobierno (RIF)'*/ },
   },
 
   /** Etiqueta de taquilla. Variables: {number} (sin ceros), {number2} (01, 02…) */
@@ -59,13 +59,16 @@ export default {
 
   /** Pantalla de sala */
   display: {
-    /** 'cedula' → "Cédula V-12.345.678 pase a Taquilla N° 3" · 'ticket' → "Turno N-001 …" */
+    /**
+     * La TV muestra siempre turno (ZE-001), cédula y taquilla. callBy decide cuál va más grande:
+     * 'cedula' → cédula destacada · 'ticket' → número de turno destacado.
+     */
     callBy: 'cedula',
     /** Ocultar los últimos 3 dígitos de la cédula en la TV (V-12.345.***). Si es true, la voz anuncia el N° de turno. */
     maskCedula: false,
     voiceEnabled: true,
     /** Variables: {cedula} (número con puntos), {code}, {deskNumber}, {desk}, {reason} */
-    voiceTemplateCedula: 'Cédula {cedula}, pase a la taquilla número {deskNumber}',
+    voiceTemplateCedula: 'Turno {code}, cédula {cedula}, pase a la taquilla número {deskNumber}',
     voiceTemplateTicket: 'Turno {code}, pase a la taquilla número {deskNumber}',
     voiceLang: 'es-ES',
     historySize: 6,

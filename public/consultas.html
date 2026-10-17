@@ -57,7 +57,8 @@
         <div class="field"><label for="f-day">Día</label><select id="f-day" name="day"></select></div>
         <div class="field"><label for="f-desk">Taquilla</label><select id="f-desk" name="deskNumber"></select></div>
         <div class="field"><label for="f-operator">Funcionario</label><select id="f-operator" name="operatorId"></select></div>
-        <div class="field span2"><label for="f-reason">Motivo</label><select id="f-reason" name="reasonId"></select></div>
+        <div class="field" id="f-dependency-wrap"><label for="f-dependency">Dependencia</label><select id="f-dependency" name="dependencyId"></select></div>
+        <div class="field span2"><label for="f-reason">Trámite</label><select id="f-reason" name="reasonId"></select></div>
         <div class="field span2"><label for="f-department">Dirección</label><select id="f-department" name="department"></select></div>
         <div class="field"><label for="f-status">Estatus</label><select id="f-status" name="status"></select></div>
         <div class="field"><label for="f-resolution">Resultado</label><select id="f-resolution" name="resolutionStatus"></select></div>
@@ -126,6 +127,7 @@
         <div class="field span2"><label for="r-desc">Descripción (opcional)</label><textarea id="r-desc" name="description" rows="2" maxlength="1000"></textarea></div>
         <div class="field"><label for="r-prio">Prioridad (0 = normal)</label><input id="r-prio" name="priorityLevel" type="number" min="0" max="100" value="0" /></div>
         <div class="field"><label for="r-dur">Duración estimada (min)</label><input id="r-dur" name="estimatedDurationMin" type="number" min="1" max="480" value="10" /></div>
+        <div class="field"><label for="r-order">Orden en el tótem</label><input id="r-order" name="sortOrder" type="number" min="0" max="10000" value="0" /></div>
         <label class="check"><input type="checkbox" name="allowAppointments" checked /> Admite citas web</label>
         <label class="check"><input type="checkbox" name="isActive" checked /> Activo</label>
       </div>

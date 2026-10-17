@@ -86,8 +86,10 @@ function renderQueue(snapshot) {
   const mine = state.desk?.reasons?.length ? new Set(state.desk.reasons.map((r) => r.id)) : null;
   const rows = snapshot.reasons.filter((r) => r.waiting > 0);
   const t = snapshot.totals;
+  const byDep = (snapshot.dependencies ?? []).map((d) => `${d.code} ${d.waiting}`).join(' · ');
   $('#queue-totals').textContent =
     `${t.waiting} en espera` +
+    (byDep ? ` (${byDep})` : '') +
     (t.waitingPreferential ? ` · ${t.waitingPreferential} preferenciales` : '') +
     (t.pendingAppointments ? ` · ${t.pendingAppointments} citas sin presentarse` : '');
   $('#queue').innerHTML = rows.length
@@ -113,7 +115,8 @@ async function showDesks() {
       return `
       <button class="card desk-card ${taken ? 'taken' : ''}" data-desk="${d.id}" ${taken ? 'disabled' : ''}>
         <h3 style="margin:0 0 6px">${escapeHtml(deskLabel(brand, d.number))}</h3>
-        <div class="muted" style="font-size:.85rem">${d.reasons.length ? d.reasons.map(escapeHtml).join('<br>') : 'Atiende todos los motivos'}</div>
+        <div style="margin-bottom:6px">${d.dependencies.length ? d.dependencies.map((c) => `<span class="pill">${escapeHtml(c)}</span>`).join(' ') : '<span class="pill">Todas las dependencias</span>'}</div>
+        <div class="muted" style="font-size:.85rem">${d.departments.length ? d.departments.map(escapeHtml).join(' · ') : 'Polivalente: todos los trámites'}</div>
         <p style="margin:10px 0 0">${d.occupiedBy ? `<span class="pill">${d.isMine ? 'Suya' : `Ocupada: ${escapeHtml(d.occupiedBy)}`}</span>` : '<span class="pill ATTENDED">Libre</span>'}</p>
       </button>`;
     })
@@ -148,9 +151,9 @@ async function refreshDesk() {
   const label = deskLabel(brand, s.desk.number);
   $('#desk-title').textContent = `${label} — Funcionario: ${state.user.name}`;
   $('#desk-header').textContent = `${label} · ${state.user.name}`;
-  $('#desk-reasons').textContent = s.desk.reasons.length
-    ? `Atiende: ${s.desk.reasons.map((r) => r.name).join(', ')}`
-    : 'Atiende todos los motivos';
+  const deps = s.desk.dependencies.length ? s.desk.dependencies.map((d) => d.name.split(' (')[0]).join(' y ') : 'Todas las dependencias';
+  const depts = s.desk.reasons.length ? [...new Set(s.desk.reasons.map((r) => r.department))].join(', ') : 'todos los trámites';
+  $('#desk-reasons').textContent = `${deps} · ${depts}`;
   $('#attended').textContent = s.attendedToday;
   renderCurrent(s.current);
 }
@@ -168,6 +171,7 @@ function renderCurrent(ticket) {
   el.innerHTML = `
     <div>
       <span class="pill ${ticket.status}">${isCalled ? 'Llamado' : 'En atención'}</span>
+      ${ticket.dependency ? `<span class="pill dep">${escapeHtml(ticket.dependency.name.split(' (')[0])}</span>` : ''}
       ${ticket.type === 'SCHEDULED' ? '<span class="pill">Cita</span>' : ''}
       ${ticket.preferentialType ? `<span class="pill pref">${escapeHtml(PREFERENTIAL[ticket.preferentialType])}</span>` : ''}
     </div>

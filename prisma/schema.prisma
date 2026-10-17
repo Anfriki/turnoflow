@@ -72,13 +72,40 @@ model Branch {
   isActive  Boolean  @default(true) @map("is_active")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  reasons  AttentionReason[]
-  desks    Desk[]
-  users    User[]
-  tickets  Ticket[]
-  counters DailyCounter[]
+  reasons      AttentionReason[]
+  dependencies Dependency[]
+  desks        Desk[]
+  users        User[]
+  tickets      Ticket[]
+  counters     DailyCounter[]
 
   @@map("branches")
+}
+
+/// Dependencias de atención (bifurcación del tótem). Ej. MPPE:
+/// Zona Educativa (ZE) y Atención al Ciudadano (OAC). Su prefijo define el código del turno.
+model Dependency {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId    String   @map("branch_id") @db.Uuid
+  code        String   @db.VarChar(10)
+  name        String   @db.VarChar(120)
+  description String?
+  /// Ícono (emoji) que se muestra en el tótem
+  icon        String?  @db.VarChar(8)
+  /// Prefijo del turno: ZE-001, OAC-001
+  prefix      String   @db.VarChar(3)
+  sortOrder   Int      @default(0) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  branch  Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  desks   DeskDependency[]
+  tickets Ticket[]
+
+  @@unique([branchId, code])
+  @@unique([branchId, prefix])
+  @@map("dependencies")
 }
 
 /// Tabla maestra de motivos de atención / trámites (administrable)
@@ -97,6 +124,8 @@ model AttentionReason {
   estimatedDurationMin Int      @default(10) @map("estimated_duration_min")
   allowAppointments    Boolean  @default(true) @map("allow_appointments")
   isActive             Boolean  @default(true) @map("is_active")
+  /// Orden de presentación en el tótem (las Direcciones se ordenan por su primer trámite)
+  sortOrder            Int      @default(0) @map("sort_order")
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -121,9 +150,10 @@ model Desk {
   isActive          Boolean  @default(true) @map("is_active")
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  branch          Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  currentOperator User?        @relation("DeskOperator", fields: [currentOperatorId], references: [id], onDelete: SetNull)
+  branch          Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  currentOperator User?            @relation("DeskOperator", fields: [currentOperatorId], references: [id], onDelete: SetNull)
   reasons         DeskReason[]
+  dependencies    DeskDependency[]
   tickets         Ticket[]
 
   @@unique([branchId, identifier])
@@ -142,6 +172,19 @@ model DeskReason {
   @@id([deskId, reasonId])
   @@index([reasonId])
   @@map("desk_reasons")
+}
+
+/// Qué dependencias atiende cada taquilla (si una taquilla no tiene filas aquí, atiende todas).
+model DeskDependency {
+  deskId       String @map("desk_id") @db.Uuid
+  dependencyId String @map("dependency_id") @db.Uuid
+
+  desk       Desk       @relation(fields: [deskId], references: [id], onDelete: Cascade)
+  dependency Dependency @relation(fields: [dependencyId], references: [id], onDelete: Cascade)
+
+  @@id([deskId, dependencyId])
+  @@index([dependencyId])
+  @@map("desk_dependencies")
 }
 
 /// Funcionarios: operadores de taquilla, supervisores y administradores
@@ -179,16 +222,18 @@ model Citizen {
 
 /// Turnos / atenciones (presenciales y citas)
 model Ticket {
-  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  branchId     String     @map("branch_id") @db.Uuid
-  reasonId     String     @map("reason_id") @db.Uuid
-  deskId       String?    @map("desk_id") @db.Uuid
-  operatorId   String?    @map("operator_id") @db.Uuid
-  ticketNumber Int        @map("ticket_number")
-  code         String     @db.VarChar(12)
-  type         TicketType @default(WALK_IN)
-  scheduledAt  DateTime?  @map("scheduled_at") @db.Timestamptz(6)
-  status       TicketStatus @default(WAITING)
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  branchId         String            @map("branch_id") @db.Uuid
+  reasonId         String            @map("reason_id") @db.Uuid
+  /// Dependencia elegida en el tótem (null en turnos anteriores a su creación)
+  dependencyId     String?           @map("dependency_id") @db.Uuid
+  deskId           String?           @map("desk_id") @db.Uuid
+  operatorId       String?           @map("operator_id") @db.Uuid
+  ticketNumber     Int               @map("ticket_number")
+  code             String            @db.VarChar(12)
+  type             TicketType        @default(WALK_IN)
+  scheduledAt      DateTime?         @map("scheduled_at") @db.Timestamptz(6)
+  status           TicketStatus      @default(WAITING)
   /// Prioridad efectiva = prioridad del motivo + bonificación preferencial
   priorityLevel    Int               @default(0) @map("priority_level")
   preferentialType PreferentialType? @map("preferential_type")
@@ -230,20 +275,22 @@ model Ticket {
   waitSeconds    Int? @map("wait_seconds")
   serviceSeconds Int? @map("service_seconds")
 
-  branch   Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  reason   AttentionReason @relation(fields: [reasonId], references: [id], onDelete: Restrict)
-  desk     Desk?           @relation(fields: [deskId], references: [id], onDelete: SetNull)
-  operator User?           @relation("TicketOperator", fields: [operatorId], references: [id], onDelete: SetNull)
+  branch     Branch          @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  reason     AttentionReason @relation(fields: [reasonId], references: [id], onDelete: Restrict)
+  dependency Dependency?     @relation(fields: [dependencyId], references: [id], onDelete: Restrict)
+  desk       Desk?           @relation(fields: [deskId], references: [id], onDelete: SetNull)
+  operator   User?           @relation("TicketOperator", fields: [operatorId], references: [id], onDelete: SetNull)
 
-  /// Índice de despacho para "Llamar siguiente"
-  @@index([branchId, status, priorityLevel(sort: Desc), createdAt(sort: Asc)], map: "idx_tickets_dispatch")
   /// Un código no se repite dentro del mismo día de negocio y sede
   @@unique([branchId, code, serviceDate], map: "uq_tickets_daily_code")
+  /// Índice de despacho para "Llamar siguiente"
+  @@index([branchId, status, priorityLevel(sort: Desc), createdAt(sort: Asc)], map: "idx_tickets_dispatch")
   @@index([branchId, serviceDate], map: "idx_tickets_branch_day")
   @@index([deskId, status], map: "idx_tickets_desk_status")
   @@index([idOrigin, idNumber, serviceDate], map: "idx_tickets_citizen")
   @@index([branchId, year, month, day], map: "idx_tickets_report_date")
   @@index([reasonId, serviceDate], map: "idx_tickets_reason_day")
+  @@index([dependencyId, serviceDate], map: "idx_tickets_dependency_day")
   @@index([operatorId, serviceDate], map: "idx_tickets_operator_day")
   @@index([branchId, resolutionStatus], map: "idx_tickets_resolution")
   @@map("tickets")

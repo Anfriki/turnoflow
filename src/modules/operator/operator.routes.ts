@@ -61,7 +61,8 @@ operatorRouter.get(
         identifier: true,
         currentOperatorId: true,
         currentOperator: { select: { name: true } },
-        reasons: { select: { reason: { select: { code: true, name: true } } } },
+        reasons: { select: { reason: { select: { department: true } } } },
+        dependencies: { select: { dependency: { select: { code: true, name: true } } } },
       },
     });
     res.json(
@@ -71,7 +72,9 @@ operatorRouter.get(
         identifier: d.identifier,
         occupiedBy: d.currentOperator?.name ?? null,
         isMine: d.currentOperatorId === user.sub,
-        reasons: d.reasons.map((r) => `${r.reason.code} · ${r.reason.name}`),
+        /** Direcciones que atiende (agrupadas; la lista de 38 trámites sería ilegible) */
+        departments: [...new Set(d.reasons.map((r) => r.reason.department))],
+        dependencies: d.dependencies.map((x) => x.dependency.code),
       })),
     );
   },

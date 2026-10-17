@@ -40,14 +40,14 @@ async function init(code) {
 
   let lastCalledId = null;
 
-  /** "Cédula V-12.345.678 · pase a · Taquilla N° 3" */
+  /** "Turno ZE-001 · V-12.345.678 · pase a · Taquilla N° 3" (callBy decide cuál va más grande) */
   const showNow = (t, animate) => {
-    $('#now-label').textContent = byCedula ? 'Cédula' : 'Turno';
+    $('#now-secondary').textContent = byCedula ? `Turno ${t.code}` : `Cédula ${t.citizen.display}`;
     $('#now-main').textContent = byCedula ? t.citizen.display : t.code;
     $('#now-main').classList.toggle('cedula', byCedula);
     $('#now-pass').textContent = 'pase a';
     $('#now-desk').textContent = t.desk ? deskLabel(brand, t.desk.number) : '';
-    $('#now-sub').textContent = byCedula ? `Turno ${t.code} · ${t.reason.name}` : t.reason.name;
+    $('#now-sub').textContent = [t.dependency?.name.split(' (')[0], t.reason.name].filter(Boolean).join(' · ');
     if (animate) {
       const now = $('#now');
       now.classList.remove('flash');
@@ -64,12 +64,16 @@ async function init(code) {
     }
     $('#history').innerHTML = (latest ? rest : [])
       .map(
-        (t) => `<div class="history-row status-${t.status}">
-          <span>${escapeHtml(byCedula ? t.citizen.display : t.code)}</span>
+        (t) => `<div class="history-row three status-${t.status}">
+          <span class="h-code">${escapeHtml(t.code)}</span>
+          <span class="h-cedula">${escapeHtml(t.citizen.display)}</span>
           <span class="desk">${escapeHtml(t.desk ? deskLabel(brand, t.desk.number) : '')}</span></div>`,
       )
       .join('');
-    const chips = s.reasons.filter((r) => r.waiting > 0);
+    // En espera por dependencia (Zona Educativa / Atención al Ciudadano); sin dependencias, por trámite
+    const chips = s.dependencies?.length
+      ? s.dependencies.map((d) => ({ name: d.name.split(' (')[0], waiting: d.waiting }))
+      : s.reasons.filter((r) => r.waiting > 0);
     $('#waiting').innerHTML =
       `<span class="chip">En espera <b>${s.totals.waiting}</b></span>` +
       (s.totals.waitingPreferential ? `<span class="chip pref">Preferencial <b>${s.totals.waitingPreferential}</b></span>` : '') +

@@ -60,6 +60,8 @@ const ReasonBody = z.object({
   estimatedDurationMin: z.number().int().min(1).max(480).default(10),
   allowAppointments: z.boolean().default(true),
   isActive: z.boolean().default(true),
+  /** Orden en el tótem; las Direcciones se ordenan por su primer trámite. */
+  sortOrder: z.number().int().min(0).max(10_000).default(0),
 });
 
 async function loadReasonFor(user: AuthUser, id: string) {
@@ -83,7 +85,7 @@ adminRouter.get(
     assertBranchAccess(me(res), branchId);
     const reasons = await prisma.attentionReason.findMany({
       where: { branchId, ...(includeInactive === 'false' ? { isActive: true } : {}) },
-      orderBy: [{ department: 'asc' }, { code: 'asc' }],
+      orderBy: [{ sortOrder: 'asc' }, { department: 'asc' }, { code: 'asc' }],
       include: { _count: { select: { tickets: true } } },
     });
     res.json(reasons.map(({ _count, ...r }) => ({ ...r, ticketCount: _count.tickets })));
@@ -128,6 +130,39 @@ adminRouter.get('/departments', supervisors, async (_req, res) => {
   res.json(rows.map((r) => r.department));
 });
 
+// ── Dependencias (bifurcación del tótem: Zona Educativa / Atención al Ciudadano) ──
+const DependencyBody = z.object({
+  branchId: uuid,
+  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9][A-Z0-9_-]{0,9}$/, 'Código: hasta 10 letras/números (ej. ZE)'),
+  name: z.string().trim().min(3).max(120),
+  description: z.string().trim().max(500).optional().nullable(),
+  icon: z.string().trim().max(8).optional().nullable(),
+  prefix: z.string().trim().toUpperCase().regex(/^[A-Z]{1,3}$/, 'Prefijo del turno: 1 a 3 letras (ej. ZE, OAC)'),
+  sortOrder: z.number().int().min(0).max(1000).default(0),
+  isActive: z.boolean().default(true),
+});
+
+adminRouter.get('/dependencies', supervisors, validate({ query: z.object({ branchId: uuid }) }), async (_req, res) => {
+  assertBranchAccess(me(res), res.locals.query.branchId);
+  res.json(await prisma.dependency.findMany({ where: { branchId: res.locals.query.branchId }, orderBy: { sortOrder: 'asc' } }));
+});
+adminRouter.post('/dependencies', onlyAdmin, validate({ body: DependencyBody }), async (_req, res) => {
+  const dep = await prisma.dependency.create({ data: res.locals.body });
+  realtime.queueUpdated(dep.branchId);
+  res.status(201).json(dep);
+});
+adminRouter.patch(
+  '/dependencies/:id',
+  onlyAdmin,
+  idParam,
+  validate({ body: DependencyBody.omit({ branchId: true }).partial() }),
+  async (_req, res) => {
+    const dep = await prisma.dependency.update({ where: { id: res.locals.params.id }, data: res.locals.body });
+    realtime.queueUpdated(dep.branchId);
+    res.json(dep);
+  },
+);
+
 // ── Taquillas ──
 const DeskBody = z.object({
   branchId: uuid,
@@ -136,6 +171,8 @@ const DeskBody = z.object({
   isActive: z.boolean().optional(),
   /** Motivos que atiende. Vacío = todos. */
   reasonIds: z.array(uuid).default([]),
+  /** Dependencias que atiende. Vacío = todas. */
+  dependencyIds: z.array(uuid).default([]),
 });
 
 adminRouter.get('/desks', supervisors, validate({ query: z.object({ branchId: uuid }) }), async (_req, res) => {
@@ -143,17 +180,21 @@ adminRouter.get('/desks', supervisors, validate({ query: z.object({ branchId: uu
   res.json(
     await prisma.desk.findMany({
       where: { branchId: res.locals.query.branchId },
-      include: { reasons: true, currentOperator: { select: { id: true, name: true } } },
+      include: { reasons: true, dependencies: true, currentOperator: { select: { id: true, name: true } } },
       orderBy: { number: 'asc' },
     }),
   );
 });
 adminRouter.post('/desks', onlyAdmin, validate({ body: DeskBody }), async (_req, res) => {
-  const { reasonIds, ...data } = res.locals.body;
+  const { reasonIds, dependencyIds, ...data } = res.locals.body;
   res.status(201).json(
     await prisma.desk.create({
-      data: { ...data, reasons: { create: reasonIds.map((reasonId: string) => ({ reasonId })) } },
-      include: { reasons: true },
+      data: {
+        ...data,
+        reasons: { create: reasonIds.map((reasonId: string) => ({ reasonId })) },
+        dependencies: { create: dependencyIds.map((dependencyId: string) => ({ dependencyId })) },
+      },
+      include: { reasons: true, dependencies: true },
     }),
   );
 });
@@ -163,14 +204,18 @@ adminRouter.patch(
   idParam,
   validate({ body: DeskBody.omit({ branchId: true }).partial() }),
   async (_req, res) => {
-    const { reasonIds, ...data } = res.locals.body;
+    const { reasonIds, dependencyIds, ...data } = res.locals.body;
     const id = res.locals.params.id;
     const desk = await prisma.$transaction(async (tx) => {
       if (reasonIds) {
         await tx.deskReason.deleteMany({ where: { deskId: id } });
         await tx.deskReason.createMany({ data: reasonIds.map((reasonId: string) => ({ deskId: id, reasonId })) });
       }
-      return tx.desk.update({ where: { id }, data, include: { reasons: true } });
+      if (dependencyIds) {
+        await tx.deskDependency.deleteMany({ where: { deskId: id } });
+        await tx.deskDependency.createMany({ data: dependencyIds.map((dependencyId: string) => ({ deskId: id, dependencyId })) });
+      }
+      return tx.desk.update({ where: { id }, data, include: { reasons: true, dependencies: true } });
     });
     realtime.queueUpdated(desk.branchId);
     res.json(desk);

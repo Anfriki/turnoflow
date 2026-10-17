@@ -22,26 +22,54 @@
       <button role="tab" data-tab="book" aria-selected="false">Agendar cita</button>
     </nav>
 
-    <!-- Registro de entrada (turno presencial) -->
+    <!-- Registro de entrada: 3 pasos -->
     <section data-panel="walkin" hidden>
-      <form id="walkin-form" class="two-col" novalidate>
-        <div class="card">
-          <h2 class="step"><span>1</span> Identificación</h2>
-          <div id="walkin-citizen"></div>
+      <ol class="wizard-steps" id="wiz-steps" aria-label="Pasos">
+        <li data-step="1"><span>1</span> Identificación</li>
+        <li data-step="2"><span>2</span> Dependencia</li>
+        <li data-step="3"><span>3</span> Trámite</li>
+      </ol>
+
+      <form id="walkin-form" novalidate>
+        <!-- Paso 1 -->
+        <div class="card wiz" data-step="1">
+          <div class="wiz-grid">
+            <div>
+              <h2 class="step"><span>1</span> Identificación del ciudadano</h2>
+              <div id="walkin-citizen"></div>
+            </div>
+            <div class="wiz-side">
+              <div id="walkin-pref"></div>
+              <p class="error-msg" role="alert" data-error="1"></p>
+              <button class="btn xl" type="button" data-next="2" style="width:100%">Continuar →</button>
+            </div>
+          </div>
         </div>
-        <div class="card">
-          <h2 class="step"><span>2</span> Motivo de atención</h2>
-          <div class="field">
-            <label for="walkin-reason">¿Qué trámite viene a realizar?</label>
-            <select id="walkin-reason" class="big-select" required></select>
-            <p class="muted reason-desc" id="walkin-reason-desc"></p>
+
+        <!-- Paso 2 -->
+        <div class="card wiz" data-step="2" hidden>
+          <div class="row-between">
+            <h2 class="step"><span>2</span> ¿A qué dependencia corresponde su trámite?</h2>
+            <span class="wiz-who muted"></span>
           </div>
-          <div class="field" id="walkin-pref-wrap">
-            <label>Atención preferencial</label>
-            <div class="seg wide" role="radiogroup" id="walkin-pref"></div>
+          <div class="dep-grid" id="dep-options"></div>
+          <div class="wiz-nav"><button class="btn ghost lg" type="button" data-back="1">← Volver</button></div>
+        </div>
+
+        <!-- Paso 3 -->
+        <div class="card wiz" data-step="3" hidden>
+          <div class="row-between">
+            <h2 class="step"><span>3</span> Seleccione la Dirección y el trámite</h2>
+            <span class="wiz-who muted"></span>
           </div>
-          <p class="error-msg" id="walkin-error" role="alert"></p>
-          <button class="btn xl" type="submit" style="width:100%">Obtener turno</button>
+          <p class="dep-chosen" id="dep-chosen"></p>
+          <div class="dir-grid" id="dir-options" role="tablist" aria-label="Direcciones"></div>
+          <div class="tramite-list" id="tramite-list" role="radiogroup" aria-label="Trámites"></div>
+          <p class="error-msg" role="alert" data-error="3"></p>
+          <div class="wiz-nav">
+            <button class="btn ghost lg" type="button" id="back-from-3">← Volver</button>
+            <button class="btn xl" type="submit" id="walkin-submit" disabled>Obtener turno</button>
+          </div>
         </div>
       </form>
     </section>
@@ -62,8 +90,13 @@
       <form id="book-form" class="card narrow" novalidate>
         <h2 style="margin-top:0">Agendar cita</h2>
         <div id="book-citizen"></div>
+        <div id="book-pref"></div>
+        <div class="field" id="book-dep-wrap">
+          <label>Dependencia</label>
+          <div class="seg wide" role="radiogroup" id="book-dep"></div>
+        </div>
         <div class="field">
-          <label for="book-reason">Motivo de atención</label>
+          <label for="book-reason">Trámite</label>
           <select id="book-reason" required></select>
           <p class="muted reason-desc" id="book-reason-desc"></p>
         </div>
@@ -73,11 +106,7 @@
         </div>
         <div class="field">
           <label>Horario</label>
-          <div class="slots" id="slots"><span class="muted">Elija motivo y fecha.</span></div>
-        </div>
-        <div class="field" id="book-pref-wrap">
-          <label>Atención preferencial</label>
-          <div class="seg wide" role="radiogroup" id="book-pref"></div>
+          <div class="slots" id="slots"><span class="muted">Elija dependencia, trámite y fecha.</span></div>
         </div>
         <p class="error-msg" id="book-error" role="alert"></p>
         <button class="btn lg" type="submit" id="book-submit" disabled style="width:100%">Confirmar cita</button>

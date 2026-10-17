@@ -28,6 +28,7 @@ export const ReportFilterSchema = z
     deskNumber: int(1, 999).optional(),
     operatorId: z.string().uuid().optional(),
     reasonId: z.string().uuid().optional(),
+    dependencyId: z.string().uuid().optional(),
     department: z.string().trim().max(150).optional(),
     status: z.enum(['WAITING', 'CALLED', 'IN_SERVICE', 'ATTENDED', 'ABSENT', 'CANCELLED']).optional(),
     resolutionStatus: z.enum(['RESUELTO', 'EN_TRAMITE', 'REMITIDO', 'NO_PROCEDE', 'PENDIENTE_RECAUDOS']).optional(),
@@ -64,6 +65,7 @@ export function buildWhere(f: ReportFilter, user: AuthUser): Prisma.TicketWhereI
     ...(f.deskNumber && { deskNumber: f.deskNumber }),
     ...(f.operatorId && { operatorId: f.operatorId }),
     ...(f.reasonId && { reasonId: f.reasonId }),
+    ...(f.dependencyId && { dependencyId: f.dependencyId }),
     ...(f.department && { reason: { department: f.department } }),
     ...(f.status && { status: f.status }),
     ...(f.resolutionStatus && { resolutionStatus: f.resolutionStatus }),
@@ -87,7 +89,7 @@ export async function listAttentions(where: Prisma.TicketWhereInput, page: numbe
 
 // ── Resumen agregado ──────────────────────────────────────────
 
-type GroupField = 'reasonId' | 'deskNumber' | 'operatorName' | 'hour' | 'dayOfWeek' | 'serviceDate' | 'department';
+type GroupField = 'reasonId' | 'dependencyId' | 'deskNumber' | 'operatorName' | 'hour' | 'dayOfWeek' | 'serviceDate' | 'department';
 
 interface StatRow {
   key: string;
@@ -150,7 +152,7 @@ async function groupStats(where: Prisma.TicketWhereInput, field: Exclude<GroupFi
 
 export async function summarize(where: Prisma.TicketWhereInput) {
   const attendedWhere = { ...where, status: 'ATTENDED' as const };
-  const [overall, byResolution, byReason, byDesk, byOperator, byHour, byDayOfWeek, byDay] = await Promise.all([
+  const [overall, byResolution, byReason, byDependency, byDesk, byOperator, byHour, byDayOfWeek, byDay] = await Promise.all([
     prisma.ticket.aggregate({
       where,
       _count: { _all: true, waitSeconds: true },
@@ -158,6 +160,7 @@ export async function summarize(where: Prisma.TicketWhereInput) {
     }),
     prisma.ticket.groupBy({ by: ['resolutionStatus'], where: attendedWhere, _count: { _all: true } }),
     groupStats(where, 'reasonId'),
+    groupStats(where, 'dependencyId'),
     groupStats(where, 'deskNumber'),
     groupStats(where, 'operatorName'),
     groupStats(where, 'hour'),
@@ -173,6 +176,15 @@ export async function summarize(where: Prisma.TicketWhereInput) {
   const reasonById = new Map(reasons.map((r) => [r.id, r]));
   const byReasonLabeled = byReason
     .map((r) => ({ ...r, code: reasonById.get(r.key)?.code, name: reasonById.get(r.key)?.name, department: reasonById.get(r.key)?.department }))
+    .sort((a, b) => b.total - a.total);
+
+  const deps = await prisma.dependency.findMany({
+    where: { id: { in: byDependency.map((d) => d.key).filter((k) => k !== '—') } },
+    select: { id: true, code: true, name: true },
+  });
+  const depById = new Map(deps.map((d) => [d.id, d]));
+  const byDependencyLabeled = byDependency
+    .map((d) => ({ ...d, code: depById.get(d.key)?.code ?? null, name: depById.get(d.key)?.name ?? 'Sin dependencia' }))
     .sort((a, b) => b.total - a.total);
 
   const deptMap = new Map<string, { key: string; total: number; attended: number; absent: number }>();
@@ -206,6 +218,7 @@ export async function summarize(where: Prisma.TicketWhereInput) {
     byResolution: byResolution
       .map((r) => ({ key: r.resolutionStatus ?? 'SIN_REGISTRO', total: r._count._all }))
       .sort((a, b) => b.total - a.total),
+    byDependency: byDependencyLabeled,
     byDepartment: [...deptMap.values()].sort((a, b) => b.total - a.total),
     byReason: byReasonLabeled,
     byDesk: byDesk.sort(numeric),
@@ -249,7 +262,11 @@ export async function exportCsv(where: Prisma.TicketWhereInput, timezone: string
     where,
     orderBy: ORDER,
     take: CSV_MAX_ROWS,
-    include: { reason: { select: { code: true, name: true, department: true } }, branch: { select: { code: true } } },
+    include: {
+      reason: { select: { code: true, name: true, department: true } },
+      dependency: { select: { name: true } },
+      branch: { select: { code: true } },
+    },
   });
   const time = (d: Date | null) =>
     d ? d.toLocaleTimeString('es-VE', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: false }) : '';
@@ -257,14 +274,14 @@ export async function exportCsv(where: Prisma.TicketWhereInput, timezone: string
 
   const header = [
     'Sede', 'Fecha', 'Año', 'Mes', 'Día', 'Día semana', 'Hora', 'Turno', 'Tipo', 'Cédula', 'Ciudadano', 'Preferencial',
-    'Cód. motivo', 'Motivo', 'Dirección', 'Taquilla', 'Funcionario', 'Estatus', 'Resultado', 'Remitido a', 'Observaciones',
+    'Dependencia', 'Cód. motivo', 'Motivo', 'Dirección', 'Taquilla', 'Funcionario', 'Estatus', 'Resultado', 'Remitido a', 'Observaciones',
     'Llegada', 'Llamado', 'Inicio atención', 'Fin atención', 'Espera (min)', 'Atención (min)',
   ];
   const lines = rows.map((t) =>
     [
       t.branch.code, t.serviceDate.toISOString().slice(0, 10), t.year, t.month, t.day, DOW[t.dayOfWeek], t.hour, t.code,
       t.type === 'SCHEDULED' ? 'Cita' : 'Presencial', formatCedula(t.idOrigin, t.idNumber), t.citizenName,
-      t.preferentialType ?? '', t.reason.code, t.reason.name, t.reason.department, t.deskNumber ?? '', t.operatorName ?? '',
+      t.preferentialType ?? '', t.dependency?.name ?? '', t.reason.code, t.reason.name, t.reason.department, t.deskNumber ?? '', t.operatorName ?? '',
       STATUS_LABEL[t.status], t.resolutionStatus ? RESOLUTION_LABEL[t.resolutionStatus] : '', t.destinationDepartment ?? '',
       t.resolutionNotes ?? '', time(t.checkedInAt ?? t.createdAt), time(t.calledAt), time(t.startedAt), time(t.finishedAt),
       min(t.waitSeconds), min(t.serviceSeconds),
@@ -278,12 +295,13 @@ export async function exportCsv(where: Prisma.TicketWhereInput, timezone: string
 /** Valores posibles para los selectores de filtros. */
 export async function filterOptions(branchId: string | undefined) {
   const branchWhere = branchId ? { branchId } : {};
-  const [desks, reasons, operators, branches] = await Promise.all([
+  const [desks, reasons, operators, branches, dependencies] = await Promise.all([
     prisma.desk.findMany({ where: branchWhere, select: { id: true, number: true, identifier: true, branchId: true }, orderBy: { number: 'asc' } }),
     prisma.attentionReason.findMany({
       where: branchWhere,
       select: { id: true, code: true, name: true, department: true, isActive: true },
-      orderBy: [{ department: 'asc' }, { code: 'asc' }],
+      // Activos primero en el orden del catálogo; los inactivos (histórico) al final
+      orderBy: [{ isActive: 'desc' }, { sortOrder: 'asc' }, { department: 'asc' }, { code: 'asc' }],
     }),
     prisma.user.findMany({
       where: { ...(branchId ? { OR: [{ branchId }, { role: 'ADMIN' }] } : {}) },
@@ -291,12 +309,15 @@ export async function filterOptions(branchId: string | undefined) {
       orderBy: { name: 'asc' },
     }),
     prisma.branch.findMany({ select: { id: true, code: true, name: true }, orderBy: { name: 'asc' } }),
+    prisma.dependency.findMany({ where: branchWhere, select: { id: true, code: true, name: true }, orderBy: { sortOrder: 'asc' } }),
   ]);
   return {
     branches,
+    dependencies,
     desks,
     reasons,
     operators,
-    departments: [...new Set(reasons.map((r) => r.department))].sort(),
+    // En el orden del catálogo (sortOrder), no alfabético
+    departments: [...new Set(reasons.map((r) => r.department))],
   };
 }

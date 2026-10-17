@@ -1,15 +1,17 @@
-import type { AttentionReason, Desk, Ticket } from '@prisma/client';
+import type { AttentionReason, Dependency, Desk, Ticket } from '@prisma/client';
 import { getBrand } from '../../config/brand.js';
 import { formatCedula, maskCedula, spokenIdNumber } from '../../lib/cedula.js';
 
 export type TicketWithRelations = Ticket & {
   reason: Pick<AttentionReason, 'id' | 'code' | 'name' | 'prefixLetter' | 'department'>;
   desk: Pick<Desk, 'id' | 'identifier' | 'number'> | null;
+  dependency: Pick<Dependency, 'id' | 'code' | 'name' | 'prefix'> | null;
 };
 
 export const ticketInclude = {
   reason: { select: { id: true, code: true, name: true, prefixLetter: true, department: true } },
   desk: { select: { id: true, identifier: true, number: true } },
+  dependency: { select: { id: true, code: true, name: true, prefix: true } },
 } as const;
 
 /**
@@ -28,6 +30,7 @@ export function toPublicTicket(t: TicketWithRelations) {
     status: t.status,
     preferentialType: t.preferentialType,
     reason: { id: t.reason.id, code: t.reason.code, name: t.reason.name, department: t.reason.department },
+    dependency: t.dependency ? { id: t.dependency.id, code: t.dependency.code, name: t.dependency.name } : null,
     desk: t.desk ? { id: t.desk.id, identifier: t.desk.identifier, number: t.desk.number } : null,
     citizen: {
       idOrigin: t.idOrigin,

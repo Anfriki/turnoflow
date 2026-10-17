@@ -66,6 +66,11 @@ export async function callNext(deskId: string, user: AuthUser) {
             NOT EXISTS (SELECT 1 FROM desk_reasons dr WHERE dr.desk_id = ${deskId}::uuid)
             OR t.reason_id IN (SELECT dr.reason_id FROM desk_reasons dr WHERE dr.desk_id = ${deskId}::uuid)
           )
+          AND (
+            t.dependency_id IS NULL
+            OR NOT EXISTS (SELECT 1 FROM desk_dependencies dd WHERE dd.desk_id = ${deskId}::uuid)
+            OR t.dependency_id IN (SELECT dd.dependency_id FROM desk_dependencies dd WHERE dd.desk_id = ${deskId}::uuid)
+          )
         ORDER BY t.priority_level DESC, t.created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED`;
@@ -244,7 +249,8 @@ export async function getDeskState(deskId: string, user: AuthUser) {
   const desk = await prisma.desk.findUnique({
     where: { id: deskId },
     include: {
-      reasons: { include: { reason: { select: { id: true, code: true, name: true } } } },
+      reasons: { include: { reason: { select: { id: true, code: true, name: true, department: true } } } },
+      dependencies: { include: { dependency: { select: { id: true, code: true, name: true } } } },
       currentOperator: { select: { name: true } },
     },
   });
@@ -265,7 +271,8 @@ export async function getDeskState(deskId: string, user: AuthUser) {
       branchId: desk.branchId,
       isMine: desk.currentOperatorId === user.sub,
       operatorName: desk.currentOperator?.name ?? null,
-      reasons: desk.reasons.map((r) => ({ id: r.reason.id, code: r.reason.code, name: r.reason.name })),
+      reasons: desk.reasons.map((r) => ({ id: r.reason.id, code: r.reason.code, name: r.reason.name, department: r.reason.department })),
+      dependencies: desk.dependencies.map((d) => ({ id: d.dependency.id, code: d.dependency.code, name: d.dependency.name })),
     },
     current: current ? toStaffTicket(current) : null,
     attendedToday,

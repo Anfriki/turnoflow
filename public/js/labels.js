@@ -18,7 +18,7 @@ export const RESOLUTION = {
 };
 
 export const PREFERENTIAL = {
-  TERCERA_EDAD: 'Tercera edad',
+  TERCERA_EDAD: 'Adulto mayor',
   EMBARAZADA: 'Embarazada',
   DISCAPACIDAD: 'Persona con discapacidad',
 };

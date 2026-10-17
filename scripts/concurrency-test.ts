@@ -1,8 +1,8 @@
 /**
  * Prueba de concurrencia de "Llamar siguiente" contra un servidor en marcha.
  *
- *  1. Tres funcionarios toman las Taquillas 01, 02 y 07 (todas atienden "Reclamo de Nómina").
- *  2. Se emiten N turnos de NOM-01 en paralelo, con cédulas distintas (prueba del correlativo atómico).
+ *  1. Tres funcionarios toman las Taquillas 01, 02 y 03 (Zona Educativa: Nómina, Ingreso y Personal).
+ *  2. Se emiten N turnos ZE de NOM-01 en paralelo, con cédulas distintas (prueba del correlativo atómico).
  *  3. Las tres taquillas llaman y finalizan turnos en paralelo, a máxima velocidad.
  *  4. Se verifica: ningún turno llamado dos veces y códigos sin duplicados.
  *
@@ -25,11 +25,14 @@ async function api<T>(method: string, path: string, body?: unknown, token?: stri
 const RESOLUTION = { resolutionStatus: 'RESUELTO', resolutionNotes: 'Prueba automatizada de concurrencia' };
 
 async function main() {
-  const branch = (await api<{ id: string; reasons: { id: string; code: string }[] }>('GET', '/api/public/branches/SEDE')).data;
+  const branch = (
+    await api<{ id: string; reasons: { id: string; code: string }[]; dependencies: { id: string; code: string }[] }>('GET', '/api/public/branches/SEDE')
+  ).data;
+  const ze = branch.dependencies.find((d) => d.code === 'ZE')!;
   const nomina = branch.reasons.find((r) => r.code === 'NOM-01')!;
 
   const ops = ['taquilla1', 'taquilla2', 'taquilla3'];
-  const deskNumbers = [1, 2, 7];
+  const deskNumbers = [1, 2, 3];
   const sessions = await Promise.all(
     ops.map(async (op, i) => {
       const { data } = await api<{ token: string }>('POST', '/api/auth/login', { email: `${op}@ministerio.local`, password: 'Taquilla123!' });
@@ -57,6 +60,7 @@ async function main() {
       api<{ id: string; code: string; message?: string }>('POST', '/api/public/tickets', {
         branchId: branch.id,
         reasonId: nomina.id,
+        dependencyId: ze.id,
         idOrigin: 'V',
         idNumber: String(base + i),
         citizenName: `Ciudadano Prueba ${i + 1}`,

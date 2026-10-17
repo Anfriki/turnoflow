@@ -2,6 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { env, isProd } from '../../config/env.js';
+import { getBrand } from '../../config/brand.js';
 import { prisma } from '../../db/prisma.js';
 import { notFound } from '../../lib/errors.js';
 import { checkCitizenId, CitizenNameSchema, IdNumberSchema, IdOriginSchema, maskName } from '../../lib/cedula.js';
@@ -40,8 +41,14 @@ const ymd = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato YYYY-MM-DD');
 const hhmm = z.string().regex(/^\d{2}:\d{2}$/, 'Formato HH:mm');
 const preferentialType = z.enum(['TERCERA_EDAD', 'EMBARAZADA', 'DISCAPACIDAD']).nullable().optional();
 
-const citizenId = { idOrigin: IdOriginSchema, idNumber: IdNumberSchema };
+/** Sólo los orígenes habilitados en brand.config.js (citizen.allowedOrigins), p. ej. V y E. */
+const AllowedOrigin = IdOriginSchema.refine(
+  (o) => getBrand().citizen.allowedOrigins.includes(o),
+  (o) => ({ message: `Origen de documento "${o}" no habilitado en esta oficina` }),
+);
+const citizenId = { idOrigin: AllowedOrigin, idNumber: IdNumberSchema };
 const citizen = { ...citizenId, citizenName: CitizenNameSchema };
+const dependencyId = z.string().uuid().optional().nullable();
 
 publicRouter.get('/branches', async (_req, res) => {
   res.json(
@@ -65,9 +72,14 @@ publicRouter.get(
         name: true,
         code: true,
         address: true,
+        dependencies: {
+          where: { isActive: true },
+          orderBy: { sortOrder: 'asc' },
+          select: { id: true, code: true, name: true, description: true, icon: true, prefix: true },
+        },
         reasons: {
           where: { isActive: true },
-          orderBy: [{ department: 'asc' }, { name: 'asc' }],
+          orderBy: [{ sortOrder: 'asc' }, { department: 'asc' }, { name: 'asc' }],
           select: {
             id: true,
             code: true,
@@ -112,7 +124,7 @@ publicRouter.post(
   '/tickets',
   issueLimiter,
   validate({
-    body: z.object({ branchId: uuid, reasonId: uuid, preferentialType, ...citizen }).superRefine(checkCitizenId),
+    body: z.object({ branchId: uuid, reasonId: uuid, dependencyId, preferentialType, ...citizen }).superRefine(checkCitizenId),
   }),
   async (_req, res) => {
     res.status(201).json(await issueWalkInTicket(res.locals.body));
@@ -130,7 +142,7 @@ publicRouter.post('/tickets/:id/cancel', validate({ params: z.object({ id: uuid 
 // ── Citas previas ──
 publicRouter.get(
   '/appointments/availability',
-  validate({ query: z.object({ branchId: uuid, reasonId: uuid, date: ymd }) }),
+  validate({ query: z.object({ branchId: uuid, reasonId: uuid, dependencyId: uuid.optional(), date: ymd }) }),
   async (_req, res) => {
     res.json(await getAvailability(res.locals.query));
   },
@@ -141,7 +153,7 @@ publicRouter.post(
   issueLimiter,
   validate({
     body: z
-      .object({ branchId: uuid, reasonId: uuid, date: ymd, time: hhmm, preferentialType, ...citizen })
+      .object({ branchId: uuid, reasonId: uuid, dependencyId, date: ymd, time: hhmm, preferentialType, ...citizen })
       .superRefine(checkCitizenId),
   }),
   async (_req, res) => {

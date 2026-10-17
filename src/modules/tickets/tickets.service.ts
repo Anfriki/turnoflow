@@ -36,6 +36,23 @@ async function nextTicketNumber(tx: Tx, branchId: string, prefix: string, servic
   return row.last_number;
 }
 
+/**
+ * Dependencia elegida en el tótem (Zona Educativa, Atención al Ciudadano…).
+ * Si la sede tiene dependencias activas es obligatoria; si no tiene, se ignora.
+ * Su prefijo define el código del turno: ZE-001, OAC-001.
+ */
+async function resolveDependency(tx: Tx | typeof prisma, branchId: string, dependencyId?: string | null) {
+  if (dependencyId) {
+    const dep = await tx.dependency.findFirst({ where: { id: dependencyId, branchId, isActive: true } });
+    if (!dep) throw notFound('Dependencia no disponible en esta sede');
+    return dep;
+  }
+  if (await tx.dependency.count({ where: { branchId, isActive: true } })) {
+    throw badRequest('Seleccione la dependencia de atención (Zona Educativa o Atención al Ciudadano)');
+  }
+  return null;
+}
+
 async function getActiveReason(tx: Tx | typeof prisma, branchId: string, reasonId: string) {
   const reason = await tx.attentionReason.findFirst({
     where: { id: reasonId, branchId, isActive: true, branch: { isActive: true } },
@@ -59,6 +76,7 @@ export async function queuePosition(t: TicketWithRelations): Promise<number | nu
     where: {
       branchId: t.branchId,
       reasonId: t.reasonId,
+      dependencyId: t.dependencyId,
       serviceDate: t.serviceDate,
       status: 'WAITING',
       ...DISPATCHABLE_WHERE,
@@ -80,7 +98,7 @@ async function withPosition(t: TicketWithRelations) {
   const [reason, openDesks] = await Promise.all([
     prisma.attentionReason.findUnique({ where: { id: t.reasonId }, select: { estimatedDurationMin: true } }),
     prisma.desk.count({
-      where: { branchId: t.branchId, isActive: true, currentOperatorId: { not: null }, ...servesReason(t.reasonId) },
+      where: { branchId: t.branchId, isActive: true, currentOperatorId: { not: null }, ...servesReason(t.reasonId, t.dependencyId) },
     }),
   ]);
   return {
@@ -94,13 +112,19 @@ async function withPosition(t: TicketWithRelations) {
 // ── Turnos presenciales (tótem) ────────────────────────────────
 
 export async function issueWalkInTicket(
-  input: CitizenInput & { branchId: string; reasonId: string; preferentialType?: PreferentialType | null },
+  input: CitizenInput & {
+    branchId: string;
+    reasonId: string;
+    dependencyId?: string | null;
+    preferentialType?: PreferentialType | null;
+  },
 ) {
   const day = businessDate();
   const now = new Date();
 
   const ticket = await prisma.$transaction(async (tx) => {
     const reason = await getActiveReason(tx, input.branchId, input.reasonId);
+    const dependency = await resolveDependency(tx, input.branchId, input.dependencyId);
     await lockCitizen(tx, input);
 
     // Un ciudadano no puede tener dos turnos activos el mismo día en la misma sede
@@ -121,15 +145,17 @@ export async function issueWalkInTicket(
       throw conflict(`La cédula ${formatCedula(input.idOrigin, input.idNumber)} ya tiene el turno ${active.code} (${active.reason.name}) en curso.`, 'ALREADY_IN_QUEUE');
     }
 
-    const n = await nextTicketNumber(tx, input.branchId, reason.prefixLetter, day);
+    const prefix = dependency?.prefix ?? reason.prefixLetter;
+    const n = await nextTicketNumber(tx, input.branchId, prefix, day);
     await citizenLookupService.remember(input.idOrigin, input.idNumber, input.citizenName, tx);
 
     return tx.ticket.create({
       data: {
         branchId: input.branchId,
         reasonId: reason.id,
+        dependencyId: dependency?.id ?? null,
         ticketNumber: n,
-        code: formatTicketCode(reason.prefixLetter, n),
+        code: formatTicketCode(prefix, n),
         type: 'WALK_IN',
         idOrigin: input.idOrigin,
         idNumber: input.idNumber,
@@ -169,9 +195,9 @@ export async function cancelTicket(ticketId: string) {
 
 // ── Citas previas (web) ────────────────────────────────────────
 
-/** Cantidad de taquillas que atienden el motivo (= citas simultáneas por franja). */
-async function slotCapacity(tx: Tx | typeof prisma, branchId: string, reasonId: string) {
-  const desks = await tx.desk.count({ where: { branchId, isActive: true, ...servesReason(reasonId) } });
+/** Cantidad de taquillas que atienden el motivo y la dependencia (= citas simultáneas por franja). */
+async function slotCapacity(tx: Tx | typeof prisma, branchId: string, reasonId: string, dependencyId: string | null) {
+  const desks = await tx.desk.count({ where: { branchId, isActive: true, ...servesReason(reasonId, dependencyId) } });
   return Math.max(1, desks);
 }
 
@@ -185,7 +211,7 @@ interface SlotRow {
  * Las franjas se generan en PostgreSQL (generate_series + AT TIME ZONE), así
  * '2026-10-19 09:00' en APP_TIMEZONE se convierte al instante UTC correcto.
  */
-async function querySlots(tx: Tx | typeof prisma, reasonId: string, date: string): Promise<SlotRow[]> {
+async function querySlots(tx: Tx | typeof prisma, reasonId: string, dependencyId: string | null, date: string): Promise<SlotRow[]> {
   const { openingTime, closingTime, slotMinutes } = getBrand().appointments;
   return tx.$queryRaw<SlotRow[]>`
     WITH slots AS (
@@ -200,6 +226,7 @@ async function querySlots(tx: Tx | typeof prisma, reasonId: string, date: string
            to_char(s.slot_start AT TIME ZONE ${env.APP_TIMEZONE}, 'HH24:MI') AS label,
            (SELECT count(*)::int FROM tickets t
              WHERE t.reason_id = ${reasonId}::uuid
+               AND t.dependency_id IS NOT DISTINCT FROM ${dependencyId}::uuid
                AND t.type = 'SCHEDULED'
                AND t.status <> 'CANCELLED'
                AND t.scheduled_at = s.slot_start) AS booked
@@ -215,14 +242,16 @@ function assertBookableDate(date: string) {
   if (!workingDays.includes(weekday(date))) throw badRequest('La oficina no atiende ese día');
 }
 
-export async function getAvailability(input: { branchId: string; reasonId: string; date: string }) {
+export async function getAvailability(input: { branchId: string; reasonId: string; dependencyId?: string; date: string }) {
   assertBookableDate(input.date);
   const reason = await getActiveReason(prisma, input.branchId, input.reasonId);
   if (!reason.allowAppointments) throw badRequest('Este trámite no admite citas previas');
+  const dependency = await resolveDependency(prisma, input.branchId, input.dependencyId);
+  const depId = dependency?.id ?? null;
 
   const [capacity, rows] = await Promise.all([
-    slotCapacity(prisma, input.branchId, reason.id),
-    querySlots(prisma, reason.id, input.date),
+    slotCapacity(prisma, input.branchId, reason.id, depId),
+    querySlots(prisma, reason.id, depId, input.date),
   ]);
   const now = Date.now();
   return {
@@ -240,6 +269,7 @@ export async function bookAppointment(
   input: CitizenInput & {
     branchId: string;
     reasonId: string;
+    dependencyId?: string | null;
     date: string;
     time: string;
     preferentialType?: PreferentialType | null;
@@ -250,15 +280,17 @@ export async function bookAppointment(
   const ticket = await prisma.$transaction(async (tx) => {
     const reason = await getActiveReason(tx, input.branchId, input.reasonId);
     if (!reason.allowAppointments) throw badRequest('Este trámite no admite citas previas');
+    const dependency = await resolveDependency(tx, input.branchId, input.dependencyId);
+    const depId = dependency?.id ?? null;
 
     await lockCitizen(tx, input);
-    // Serializa reservas concurrentes de la MISMA franja y motivo (lock liberado al hacer COMMIT).
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${reason.id}|${input.date}|${input.time}`}))`;
+    // Serializa reservas concurrentes de la MISMA franja, motivo y dependencia (lock liberado al hacer COMMIT).
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${reason.id}|${depId}|${input.date}|${input.time}`}))`;
 
-    const slot = (await querySlots(tx, reason.id, input.date)).find((s) => s.label === input.time);
+    const slot = (await querySlots(tx, reason.id, depId, input.date)).find((s) => s.label === input.time);
     if (!slot) throw badRequest('Horario fuera de la grilla de atención');
     if (slot.slot_start.getTime() <= Date.now()) throw badRequest('Ese horario ya pasó');
-    if (slot.booked >= (await slotCapacity(tx, input.branchId, reason.id))) {
+    if (slot.booked >= (await slotCapacity(tx, input.branchId, reason.id, depId))) {
       throw conflict('Ese horario se acaba de ocupar, elija otro', 'SLOT_FULL');
     }
 
@@ -274,15 +306,17 @@ export async function bookAppointment(
     });
     if (duplicate) throw conflict(`Ya tiene una cita para ese día (${duplicate.code})`, 'DUPLICATE_APPOINTMENT');
 
-    const n = await nextTicketNumber(tx, input.branchId, reason.prefixLetter, input.date);
+    const prefix = dependency?.prefix ?? reason.prefixLetter;
+    const n = await nextTicketNumber(tx, input.branchId, prefix, input.date);
     await citizenLookupService.remember(input.idOrigin, input.idNumber, input.citizenName, tx);
 
     return tx.ticket.create({
       data: {
         branchId: input.branchId,
         reasonId: reason.id,
+        dependencyId: depId,
         ticketNumber: n,
-        code: formatTicketCode(reason.prefixLetter, n),
+        code: formatTicketCode(prefix, n),
         type: 'SCHEDULED',
         scheduledAt: slot.slot_start,
         idOrigin: input.idOrigin,

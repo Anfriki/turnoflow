@@ -73,6 +73,8 @@ async function loadOptions() {
   $('#f-operator').innerHTML = opt('', 'Todos') + o.operators.map((u) => opt(u.id, u.name)).join('');
   const byDept = new Map();
   for (const r of o.reasons) byDept.set(r.department, [...(byDept.get(r.department) ?? []), r]);
+  $('#f-dependency-wrap').hidden = !o.dependencies.length;
+  $('#f-dependency').innerHTML = opt('', 'Todas') + o.dependencies.map((d) => opt(d.id, d.name.split(' (')[0])).join('');
   $('#f-reason').innerHTML =
     opt('', 'Todos') +
     [...byDept]
@@ -244,6 +246,7 @@ async function loadSummary() {
       <tbody>${s.byResolution
         .map((r) => `<tr><td><span class="res res-${r.key}">${RESOLUTION[r.key]?.label ?? 'Sin registro'}</span></td><td class="num">${r.total}</td></tr>`)
         .join('') || '<tr><td colspan="2" class="muted">Sin atenciones finalizadas</td></tr>'}</tbody></table></div>
+    ${s.byDependency.some((d) => d.code) ? statTable('Por dependencia', s.byDependency, (r) => r.name) : ''}
     ${statTable('Por Dirección', s.byDepartment.map((d) => ({ ...d, avgWaitMin: null, avgServiceMin: null })), (r) => r.key)}
     ${statTable('Por motivo', s.byReason, (r) => `${r.code ?? ''} · ${r.name ?? r.key}`)}
     ${statTable('Por taquilla', s.byDesk, (r) => (r.key === 'null' || r.key === '—' ? 'Sin asignar' : deskLabel(brand, r.key)))}
@@ -289,7 +292,7 @@ function openReason(r) {
   $('#reason-error').textContent = '';
   $('#reason-title').textContent = r ? `Editar ${r.code}` : 'Nuevo motivo';
   if (r) {
-    for (const k of ['code', 'prefixLetter', 'name', 'department', 'description', 'priorityLevel', 'estimatedDurationMin']) f.elements[k].value = r[k] ?? '';
+    for (const k of ['code', 'prefixLetter', 'name', 'department', 'description', 'priorityLevel', 'estimatedDurationMin', 'sortOrder']) f.elements[k].value = r[k] ?? '';
     f.elements.allowAppointments.checked = r.allowAppointments;
     f.elements.isActive.checked = r.isActive;
   }
@@ -309,6 +312,7 @@ $('#reason-form').addEventListener('submit', async (e) => {
     description: f.description.value.trim() || null,
     priorityLevel: Number(f.priorityLevel.value || 0),
     estimatedDurationMin: Number(f.estimatedDurationMin.value || 10),
+    sortOrder: Number(f.sortOrder.value || 0),
     allowAppointments: f.allowAppointments.checked,
     isActive: f.isActive.checked,
   };
